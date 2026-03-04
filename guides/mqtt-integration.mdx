@@ -1,0 +1,418 @@
+---
+title: 'MQTT Integration'
+description: 'Publish object detection results via MQTT for IoT integration'
+---
+
+## Overview
+
+YOLO-Pi publishes detection results to an MQTT broker, enabling real-time notification and integration with IoT systems, home automation, and monitoring dashboards. This guide explains how to configure MQTT, understand the message format, and subscribe to detection events.
+
+## MQTT Setup
+
+YOLO-Pi uses the Eclipse Paho MQTT client for Python to publish detection events.
+
+### Environment Configuration
+
+The MQTT server is configured via an environment variable:
+
+```python
+mqtt_server = os.environ['MQTT']
+```
+
+*Source: `src/yolo-pi.py:17`*
+
+### Setting the MQTT Server
+
+Before running YOLO-Pi, set the `MQTT` environment variable:
+
+```bash
+export MQTT=mqtt.example.com
+python yolo-pi.py
+```
+
+Or set it inline:
+
+```bash
+MQTT=192.168.1.100 python yolo-pi.py
+```
+
+<Note>
+  The script will exit if the `MQTT` environment variable is not set.
+</Note>
+
+## Client Initialization
+
+YOLO-Pi initializes the MQTT client at startup:
+
+```python
+print("Using mqtt server: ", mqtt_server)
+
+try:
+    print("Starting up")
+    client = mqtt.Client("yolo-pi")
+    client.connect(mqtt_server, 1883)
+    print("Connected")
+
+except Exception as e:
+    print("Could not connect to mqtt stream", e)
+    sys.exit(1)
+```
+
+*Source: `src/yolo-pi.py:19-29`*
+
+### Connection Parameters
+
+- **Client ID**: `"yolo-pi"` - Unique identifier for this MQTT client
+- **Port**: `1883` - Standard MQTT port (non-TLS)
+- **Topic**: `"yolo"` - All detections published to this topic
+
+<Warning>
+  If the MQTT broker is unreachable, YOLO-Pi will exit immediately. Ensure your broker is running before starting the application.
+</Warning>
+
+## Detection Message Format
+
+Each frame with detected objects publishes a JSON message to the `yolo` topic.
+
+### Message Structure
+
+```json
+[
+  {
+    "item": "person",
+    "score": "0.8542"
+  },
+  {
+    "item": "car",
+    "score": "0.7234"
+  },
+  {
+    "item": "dog",
+    "score": "0.6891"
+  }
+]
+```
+
+### Field Descriptions
+
+<ResponseField name="item" type="string" required>
+  The detected object class name (e.g., "person", "car", "dog")
+</ResponseField>
+
+<ResponseField name="score" type="string" required>
+  Confidence score as a string (0.0 to 1.0). Higher values indicate greater confidence.
+</ResponseField>
+
+## Publishing Detections
+
+The detection results are published after each frame is processed:
+
+```python
+json_data = []
+
+for i, c in reversed(list(enumerate(out_classes))):
+    predicted_class = class_names[c]
+    box = out_boxes[i]
+    score = out_scores[i]
+
+    label = '{} {:.2f}'.format(predicted_class, score)
+    json_data.append({"item": predicted_class, "score": str(score)})
+    # ... draw bounding boxes ...
+
+# Publish to MQTT
+val = json.dumps(json_data).encode()
+print("image: ", val)
+tkey = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S") 
+client.publish('yolo', payload=val)
+```
+
+*Source: `src/yolo-pi.py:64-102`*
+
+### Message Properties
+
+- **Topic**: `"yolo"`
+- **Payload**: UTF-8 encoded JSON string
+- **QoS**: Default (0) - At most once delivery
+- **Retain**: False - Messages are not retained on the broker
+
+<Note>
+  The `tkey` variable (timestamp) is created but not currently published. You can extend the message format to include timestamps if needed.
+</Note>
+
+## Subscribing to Detection Events
+
+Create an MQTT subscriber to receive detection events in real-time.
+
+### Python Subscriber Example
+
+```python
+import paho.mqtt.client as mqtt
+import json
+
+def on_connect(client, userdata, flags, rc):
+    print(f"Connected with result code {rc}")
+    client.subscribe("yolo")
+
+def on_message(client, userdata, msg):
+    print(f"Topic: {msg.topic}")
+    
+    # Parse JSON payload
+    detections = json.loads(msg.payload.decode())
+    
+    for detection in detections:
+        item = detection['item']
+        score = float(detection['score'])
+        print(f"Detected: {item} (confidence: {score:.2%})")
+
+# Create MQTT client
+client = mqtt.Client("yolo-subscriber")
+client.on_connect = on_connect
+client.on_message = on_message
+
+# Connect to broker
+client.connect("mqtt.example.com", 1883, 60)
+
+# Blocking loop
+client.loop_forever()
+```
+
+### Node.js Subscriber Example
+
+```javascript
+const mqtt = require('mqtt');
+const client = mqtt.connect('mqtt://mqtt.example.com:1883');
+
+client.on('connect', () => {
+  console.log('Connected to MQTT broker');
+  client.subscribe('yolo', (err) => {
+    if (!err) {
+      console.log('Subscribed to yolo topic');
+    }
+  });
+});
+
+client.on('message', (topic, message) => {
+  const detections = JSON.parse(message.toString());
+  
+  detections.forEach(detection => {
+    console.log(`Detected: ${detection.item} (${(parseFloat(detection.score) * 100).toFixed(2)}%)`);
+  });
+});
+```
+
+### Command Line Testing
+
+Use `mosquitto_sub` to test MQTT messages:
+
+```bash
+mosquitto_sub -h mqtt.example.com -t yolo -v
+```
+
+Example output:
+```
+yolo [{"item": "person", "score": "0.8542"}, {"item": "chair", "score": "0.6234"}]
+yolo [{"item": "dog", "score": "0.7891"}]
+```
+
+## Detection Payload Details
+
+### Empty Frames
+
+If no objects are detected in a frame, an empty array is published:
+
+```json
+[]
+```
+
+### Multiple Objects
+
+Multiple detections are included in the same message:
+
+```json
+[
+  {"item": "person", "score": "0.9123"},
+  {"item": "person", "score": "0.8567"},
+  {"item": "car", "score": "0.7845"},
+  {"item": "bicycle", "score": "0.6234"}
+]
+```
+
+<Note>
+  The order of detections is reversed (highest index first) due to the `reversed()` call in the loop. This is an implementation detail and should not be relied upon for ordering.
+</Note>
+
+## Integration Examples
+
+### Home Assistant
+
+Integrate YOLO-Pi detections with Home Assistant:
+
+```yaml
+mqtt:
+  sensor:
+    - name: "YOLO Detections"
+      state_topic: "yolo"
+      value_template: "{{ value_json | length }}"
+      json_attributes_topic: "yolo"
+      json_attributes_template: "{{ value_json | tojson }}"
+
+automation:
+  - alias: "Person Detected Alert"
+    trigger:
+      platform: mqtt
+      topic: yolo
+    condition:
+      condition: template
+      value_template: >-
+        {{ 'person' in trigger.payload_json | map(attribute='item') | list }}
+    action:
+      service: notify.mobile_app
+      data:
+        message: "Person detected by YOLO-Pi!"
+```
+
+### Node-RED Flow
+
+```json
+[
+  {
+    "id": "mqtt_in",
+    "type": "mqtt in",
+    "topic": "yolo",
+    "broker": "mqtt_broker",
+    "name": "YOLO Detections"
+  },
+  {
+    "id": "json_parse",
+    "type": "json"
+  },
+  {
+    "id": "filter_person",
+    "type": "switch",
+    "property": "payload",
+    "rules": [
+      {
+        "t": "jsonata",
+        "v": "$exists(payload[item='person'])"
+      }
+    ]
+  }
+]
+```
+
+## Advanced Configuration
+
+### Custom MQTT Port
+
+To use a non-standard MQTT port, modify the connection:
+
+```python
+# In yolo-pi.py, change line 24:
+client.connect(mqtt_server, 8883)  # For MQTT over TLS
+```
+
+### Authentication
+
+Add username/password authentication:
+
+```python
+# After client creation, before connect:
+mqtt_username = os.environ.get('MQTT_USER', '')
+mqtt_password = os.environ.get('MQTT_PASS', '')
+
+if mqtt_username:
+    client.username_pw_set(mqtt_username, mqtt_password)
+
+client.connect(mqtt_server, 1883)
+```
+
+### TLS/SSL Encryption
+
+```python
+import ssl
+
+# Configure TLS
+client.tls_set(ca_certs="/path/to/ca.crt",
+               certfile="/path/to/client.crt",
+               keyfile="/path/to/client.key",
+               cert_reqs=ssl.CERT_REQUIRED,
+               tls_version=ssl.PROTOCOL_TLSv1_2)
+
+client.connect(mqtt_server, 8883)
+```
+
+## Message Rate
+
+YOLO-Pi publishes a message for every processed frame:
+
+- **Raspberry Pi 3**: ~0.5-1 message per second
+- **MacBook Pro**: ~0.5 messages per second (with Tiny YOLO VOC)
+
+The message rate depends on inference speed and frame processing time.
+
+<Warning>
+  High message rates can overwhelm MQTT brokers or subscribers. Consider implementing message throttling or filtering if needed.
+</Warning>
+
+## Troubleshooting
+
+### Connection Refused
+
+**Error**: `Could not connect to mqtt stream [Errno 111] Connection refused`
+
+**Solutions**:
+- Verify MQTT broker is running: `mosquitto -v`
+- Check firewall rules allow port 1883
+- Ensure `MQTT` environment variable points to correct host
+
+### No Messages Received
+
+**Possible Causes**:
+1. No objects detected (check camera view and lighting)
+2. Detection threshold too high (lower `score_threshold`)
+3. MQTT subscriber on wrong topic (use `yolo`)
+4. Network issues between publisher and broker
+
+### JSON Decode Errors
+
+**Error**: `json.decoder.JSONDecodeError: Expecting value`
+
+**Solutions**:
+- Ensure message payload is valid JSON
+- Check for empty or malformed messages
+- Verify UTF-8 encoding: `msg.payload.decode('utf-8')`
+
+## Performance Considerations
+
+### Message Size
+
+Typical message sizes:
+- Empty frame: ~2 bytes (`[]`)
+- Single detection: ~40-50 bytes
+- 10 detections: ~400-500 bytes
+
+Messages are small and suitable for constrained networks.
+
+### QoS Levels
+
+YOLO-Pi uses QoS 0 (at most once). For critical applications, consider:
+
+```python
+# QoS 1 - At least once delivery
+client.publish('yolo', payload=val, qos=1)
+
+# QoS 2 - Exactly once delivery (slower)
+client.publish('yolo', payload=val, qos=2)
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Model Conversion" icon="arrows-rotate" href="/guides/model-conversion">
+    Learn how to convert different YOLO models
+  </Card>
+  
+  <Card title="Running Inference" icon="play" href="/guides/running-inference">
+    Configure and optimize object detection
+  </Card>
+</CardGroup>

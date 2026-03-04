@@ -1,80 +1,313 @@
 ---
-title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+title: Quickstart
+description: Get started with YOLO-Pi in minutes
 ---
 
-## Get started in three steps
+# Quick Start Guide
 
-Get your documentation site running locally and make your first customization.
+Get YOLO-Pi running on your hardware in just a few steps. This guide will walk you through the fastest path to real-time object detection.
 
-### Step 1: Set up your local environment
+## Prerequisites
 
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
-    
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
-    
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
-
-### Step 2: Deploy your changes
-
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
-    
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
-
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
-
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
-
-### Step 3: Go live
-
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
-
-## Next steps
-
-Now that you have your docs running, explore these key features:
+Before you begin, ensure you have:
 
 <CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
+  <Card title="Hardware" icon="microchip">
+    - Raspberry Pi 3 or newer (or x86 computer for testing)
+    - USB camera or Raspberry Pi Camera Module
+    - 8GB+ microSD card
+    - Internet connection
+  </Card>
+  <Card title="Software" icon="code">
+    - Docker installed (recommended), or
+    - Python 3.5+ with pip
+    - Git for cloning the repository
+  </Card>
 </CardGroup>
 
-<Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
-</Note>
+## Installation Methods
+
+Choose the installation method that best fits your needs:
+
+<Tabs>
+  <Tab title="Docker (Recommended)">
+    Docker provides the fastest setup with all dependencies pre-configured.
+
+    <Steps>
+      <Step title="Clone the repository">
+        ```bash
+        git clone https://github.com/CiscoBlockChain/YOLO-Pi.git
+        cd YOLO-Pi
+        ```
+      </Step>
+
+      <Step title="Build the Docker image">
+        For x86/x64 systems (MacBook, Linux workstation):
+        ```bash
+        docker build -t yolo-pi --file Dockerfile.x86 .
+        ```
+
+        For Raspberry Pi:
+        ```bash
+        docker build -t yolo-pi --file Dockerfile.rpi .
+        ```
+
+        <Note>Building on Raspberry Pi can take 6-12 hours. Consider using pre-built images or building on x86 first.</Note>
+      </Step>
+
+      <Step title="Run the container">
+        ```bash
+        docker run -it --rm --device=/dev/video0:/dev/video0 \
+          -e MQTT=mqtt.example.com \
+          yolo-pi /bin/bash
+        ```
+
+        Replace `mqtt.example.com` with your MQTT broker address.
+      </Step>
+    </Steps>
+
+    Continue to [Model Setup](#model-setup) below.
+  </Tab>
+
+  <Tab title="Manual Installation">
+    Install dependencies manually for development or custom configurations.
+
+    <Steps>
+      <Step title="Install system dependencies">
+        ```bash
+        # On Raspberry Pi or Debian/Ubuntu
+        sudo apt-get update
+        sudo apt-get install -y \
+          python3 python3-pip python3-dev \
+          build-essential cmake git wget \
+          libopencv-dev python3-opencv
+        ```
+      </Step>
+
+      <Step title="Install Python packages">
+        ```bash
+        pip3 install numpy keras==2.1.2 tensorflow pillow h5py paho-mqtt
+        ```
+
+        <Warning>Use Keras 2.1.2 for compatibility with the YOLO models. Newer versions may cause issues.</Warning>
+      </Step>
+
+      <Step title="Clone the repository">
+        ```bash
+        git clone https://github.com/CiscoBlockChain/YOLO-Pi.git
+        cd YOLO-Pi/src
+        ```
+      </Step>
+    </Steps>
+  </Tab>
+</Tabs>
+
+## Model Setup
+
+Download and convert a pre-trained YOLO model to Keras format.
+
+<Steps>
+  <Step title="Download YOLO model">
+    Download the tiny-yolo-voc model (recommended for Raspberry Pi):
+
+    ```bash
+    cd model_data
+    wget https://pjreddie.com/media/files/tiny-yolo-voc.weights
+    wget https://raw.githubusercontent.com/pjreddie/darknet/master/cfg/tiny-yolo-voc.cfg
+    cd ..
+    ```
+
+    <Info>The tiny-yolo-voc model provides a good balance between speed and accuracy for edge devices.</Info>
+  </Step>
+
+  <Step title="Convert to Keras format">
+    Use the YAD2K converter to create a Keras model:
+
+    ```bash
+    python3 yad2k/yad2k.py \
+      model_data/tiny-yolo-voc.cfg \
+      model_data/tiny-yolo-voc.weights \
+      model_data/tiny-yolo-voc.h5
+    ```
+
+    This creates `tiny-yolo-voc.h5` which contains the Keras model.
+  </Step>
+
+  <Step title="Verify model files">
+    Ensure you have all required files:
+
+    ```bash
+    ls model_data/
+    ```
+
+    You should see:
+    - `tiny-yolo-voc.h5` - Keras model
+    - `tiny-yolo-voc_anchors.txt` - Anchor boxes
+    - `pascal_classes.txt` - Object class names
+  </Step>
+</Steps>
+
+## Configuration
+
+Configure YOLO-Pi to use your model and MQTT broker.
+
+<Steps>
+  <Step title="Set MQTT broker">
+    Set the MQTT environment variable:
+
+    ```bash
+    export MQTT=mqtt.example.com
+    ```
+
+    Replace with your MQTT broker hostname or IP address.
+  </Step>
+
+  <Step title="Configure model paths">
+    Edit `src/yolo-pi.py` and update the model configuration:
+
+    ```python
+    model_path = 'model_data/tiny-yolo-voc.h5'
+    anchors_path = 'model_data/tiny-yolo-voc_anchors.txt'
+    classes_path = 'model_data/pascal_classes.txt'
+    ```
+
+    These paths are correct for the tiny-yolo-voc model. Change them if using a different model.
+  </Step>
+</Steps>
+
+## First Detection
+
+Run YOLO-Pi and start detecting objects!
+
+<Steps>
+  <Step title="Start the detection script">
+    ```bash
+    cd src
+    python3 yolo-pi.py
+    ```
+
+    The script will:
+    1. Load the YOLO model
+    2. Connect to your MQTT broker
+    3. Start capturing from the camera
+    4. Process frames and detect objects
+  </Step>
+
+  <Step title="Monitor detections">
+    Watch the console output for detected objects:
+
+    ```json
+    image: [{"item": "person", "score": "0.87"}, {"item": "cat", "score": "0.92"}]
+    ```
+
+    Detections are also published to the MQTT topic `yolo` in JSON format.
+  </Step>
+
+  <Step title="Subscribe to MQTT (optional)">
+    In another terminal, subscribe to see detections:
+
+    ```bash
+    mosquitto_sub -h mqtt.example.com -t yolo
+    ```
+
+    You'll receive JSON messages with detected objects and confidence scores.
+  </Step>
+</Steps>
+
+## Performance Expectations
+
+Detection speed varies by hardware:
+
+| Hardware | FPS | Notes |
+|----------|-----|-------|
+| Raspberry Pi 3 | ~0.5 FPS | One frame every 2 seconds |
+| Raspberry Pi 4 | ~1 FPS | Improved performance |
+| MacBook Pro | ~5-10 FPS | M1/M2 or recent Intel |
+
+<Tip>For better performance on Raspberry Pi, ensure adequate cooling and consider using the GPU-accelerated TensorFlow build.</Tip>
+
+## Visualization (Optional)
+
+By default, visualization is disabled. To see the detection output:
+
+1. Edit `src/yolo-pi.py`
+2. Uncomment line 174:
+
+```python
+cv2.imshow("preview", open_cv_image)
+```
+
+3. Run the script with display access
+
+<Warning>Enabling visualization adds overhead and reduces FPS, especially on Raspberry Pi.</Warning>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Model Conversion" icon="arrows-rotate" href="/guides/model-conversion">
+    Learn how to convert other YOLO models
+  </Card>
+  <Card title="MQTT Integration" icon="satellite-dish" href="/guides/mqtt-integration">
+    Integrate detections with your IoT platform
+  </Card>
+  <Card title="Raspberry Pi Setup" icon="raspberry-pi" href="/setup/raspberry-pi">
+    Optimize for Raspberry Pi hardware
+  </Card>
+  <Card title="Production Deployment" icon="server" href="/deployment/production">
+    Deploy in production environments
+  </Card>
+</CardGroup>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Camera not detected">
+    Ensure your camera is connected and recognized:
+
+    ```bash
+    ls -la /dev/video*
+    ```
+
+    You should see `/dev/video0`. If using Docker, ensure the device is passed with `--device=/dev/video0:/dev/video0`.
+  </Accordion>
+
+  <Accordion title="MQTT connection failed">
+    Check the MQTT broker is accessible:
+
+    ```bash
+    ping mqtt.example.com
+    ```
+
+    Verify the MQTT environment variable is set:
+
+    ```bash
+    echo $MQTT
+    ```
+  </Accordion>
+
+  <Accordion title="Out of memory errors">
+    On Raspberry Pi, ensure adequate swap space:
+
+    ```bash
+    free -h
+    ```
+
+    See [Raspberry Pi Setup](/setup/raspberry-pi#swap-configuration) for swap configuration.
+  </Accordion>
+
+  <Accordion title="Model loading errors">
+    Verify all model files exist:
+
+    ```bash
+    ls -la model_data/
+    ```
+
+    Ensure the paths in `yolo-pi.py` match your actual file locations.
+  </Accordion>
+</AccordionGroup>
+
+## Get Help
+
+<Card title="View Full Documentation" icon="book" href="/introduction">
+  Explore comprehensive guides, API reference, and deployment options
+</Card>

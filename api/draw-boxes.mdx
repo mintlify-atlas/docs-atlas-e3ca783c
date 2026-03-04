@@ -1,0 +1,152 @@
+---
+title: 'draw_boxes'
+description: 'Draw bounding boxes with labels on images'
+---
+
+## Overview
+
+The `draw_boxes` module provides utilities for visualizing object detection results by drawing bounding boxes on images with class labels and confidence scores.
+
+## Functions
+
+### draw_boxes()
+
+Draw bounding boxes with class names and optional scores on an image.
+
+```python
+def draw_boxes(image, boxes, box_classes, class_names, scores=None)
+```
+
+#### Parameters
+
+<ParamField path="image" type="numpy.ndarray" required>
+  An array of shape `(width, height, 3)` with pixel values in the range [0, 1]. The image will be converted to PIL format internally.
+</ParamField>
+
+<ParamField path="boxes" type="numpy.ndarray" required>
+  An array of shape `(num_boxes, 4)` containing bounding box coordinates in the format `(y_min, x_min, y_max, x_max)`.
+</ParamField>
+
+<ParamField path="box_classes" type="list" required>
+  A list of integer indices into the `class_names` array, indicating which class each box belongs to.
+</ParamField>
+
+<ParamField path="class_names" type="list" required>
+  A list of string class names (e.g., `['person', 'car', 'dog']`).
+</ParamField>
+
+<ParamField path="scores" type="numpy.ndarray" default="None">
+  An optional array of confidence scores for each box. When provided, scores are displayed alongside class names in the format "Class 0.95".
+</ParamField>
+
+#### Returns
+
+<ResponseField name="image" type="numpy.ndarray">
+  A copy of the input image (as a numpy array) with bounding boxes, labels, and scores drawn on it.
+</ResponseField>
+
+#### Description
+
+The function performs the following operations:
+
+1. Converts the input image from normalized float values to PIL Image format
+2. Loads the FiraMono-Medium font for text rendering
+3. Generates distinct colors for each class using HSV color space
+4. Draws rectangles for each bounding box with the corresponding class color
+5. Adds text labels with class names and optional scores
+6. Returns the modified image as a numpy array
+
+**Visual Features:**
+- Box thickness scales with image size (approximately 1/300 of combined width and height)
+- Font size adapts to image height (3% of image height)
+- Labels are positioned above boxes when space permits, otherwise below
+- Each class receives a consistent, vibrant color
+
+#### Example Usage
+
+```python
+import numpy as np
+from PIL import Image
+from yad2k.utils.draw_boxes import draw_boxes
+
+# Load an image
+image = Image.open('test.jpg')
+image_array = np.array(image) / 255.0  # Normalize to [0, 1]
+
+# Detection results
+boxes = np.array([
+    [100, 50, 200, 150],   # y_min, x_min, y_max, x_max
+    [150, 200, 250, 300]
+])
+box_classes = [0, 1]  # Indices into class_names
+class_names = ['person', 'car']
+scores = np.array([0.95, 0.87])
+
+# Draw boxes on image
+result = draw_boxes(image_array, boxes, box_classes, class_names, scores)
+
+# Save or display result
+Image.fromarray(result).save('output.jpg')
+```
+
+#### Example Without Scores
+
+```python
+# Draw boxes without confidence scores
+result = draw_boxes(image_array, boxes, box_classes, class_names)
+# Labels will show only class names: "person", "car"
+```
+
+---
+
+### get_colors_for_classes()
+
+Generate a list of random but consistent colors for object classes.
+
+```python
+def get_colors_for_classes(num_classes)
+```
+
+#### Parameters
+
+<ParamField path="num_classes" type="int" required>
+  The number of distinct classes to generate colors for.
+</ParamField>
+
+#### Returns
+
+<ResponseField name="colors" type="list">
+  A list of RGB tuples `(R, G, B)` with values in the range [0, 255]. The list contains `num_classes` colors.
+</ResponseField>
+
+#### Description
+
+This function generates visually distinct colors using HSV color space and caches them for consistency across multiple calls. Features:
+
+- **Deterministic**: Uses a fixed random seed (10101) for reproducible colors
+- **Cached**: Returns previously generated colors if `num_classes` matches
+- **Well-distributed**: Generates colors evenly spaced in HSV hue space
+- **Shuffled**: Colors are shuffled to decorrelate adjacent class indices
+
+#### Example Usage
+
+```python
+from yad2k.utils.draw_boxes import get_colors_for_classes
+
+# Generate colors for 80 COCO classes
+colors = get_colors_for_classes(80)
+
+print(colors[0])  # (205, 231, 0) - RGB tuple
+print(len(colors))  # 80
+
+# Subsequent calls with same num_classes return cached colors
+colors2 = get_colors_for_classes(80)
+print(colors == colors2)  # True
+```
+
+## Notes
+
+- The `draw_boxes()` function requires the FiraMono-Medium.otf font file to be located at `font/FiraMono-Medium.otf` relative to the working directory
+- Input images should be normalized to [0, 1] range before passing to `draw_boxes()`
+- Box coordinates follow the YOLO format: `(y_min, x_min, y_max, x_max)`
+- The function prints each box's label and coordinates to stdout for debugging

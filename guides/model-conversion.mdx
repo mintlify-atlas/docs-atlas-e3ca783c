@@ -1,0 +1,244 @@
+---
+title: 'Model Conversion'
+description: 'Convert YOLO models to Keras format using YAD2K'
+---
+
+## Overview
+
+YOLO-Pi uses the YAD2K (Yet Another Darknet to Keras) conversion tool to transform YOLO models from the Darknet framework into Keras-compatible `.h5` model files. This guide explains how to download YOLO weights and configurations, and convert them for use with YOLO-Pi.
+
+## Prerequisites
+
+- Python 3.6 or higher
+- YAD2K conversion tool (included in `src/yad2k/`)
+- YOLO weights and configuration files from the official YOLO site
+
+## Supported Models
+
+YOLO-Pi supports the following YOLO model configurations:
+
+<CardGroup cols={2}>
+  <Card title="Tiny YOLO VOC" icon="bolt">
+    Lightweight model optimized for speed. Best for Raspberry Pi and resource-constrained devices.
+    - **Model**: `tiny-yolo-voc.h5`
+    - **Classes**: PASCAL VOC (20 classes)
+    - **Performance**: ~1 frame per 2 seconds on MacBook Pro
+  </Card>
+  
+  <Card title="Full YOLO" icon="brain">
+    Full-size model for better accuracy at the cost of performance.
+    - **Model**: `yolo.h5`
+    - **Classes**: COCO (80 classes)
+    - **Performance**: Slower but more accurate
+  </Card>
+</CardGroup>
+
+## Download YOLO Models
+
+<Steps>
+  <Step title="Visit the YOLO website">
+    Download the YOLO weights and configuration files from the [official YOLO site](https://pjreddie.com/darknet/yolo/).
+  </Step>
+  
+  <Step title="Choose your model">
+    For Raspberry Pi and embedded devices, we recommend **Tiny YOLO VOC**:
+    
+    ```bash
+    wget https://pjreddie.com/media/files/tiny-yolo-voc.weights
+    wget https://raw.githubusercontent.com/pjreddie/darknet/master/cfg/tiny-yolo-voc.cfg
+    ```
+  </Step>
+  
+  <Step title="Verify downloads">
+    Ensure both files are downloaded successfully:
+    
+    ```bash
+    ls -lh tiny-yolo-voc.*
+    ```
+    
+    You should see both `.weights` and `.cfg` files.
+  </Step>
+</Steps>
+
+## Converting Models with YAD2K
+
+### Basic Conversion
+
+The YAD2K conversion process transforms Darknet weights and configuration into a Keras model:
+
+```bash
+./yad2k.py tiny-yolo-voc.cfg tiny-yolo-voc.weights model_data/tiny-yolo-voc.h5
+```
+
+### Conversion Command Format
+
+```bash
+./yad2k.py [config_file] [weights_file] [output_path]
+```
+
+**Parameters:**
+- `config_file`: Darknet configuration file (`.cfg`)
+- `weights_file`: Pre-trained YOLO weights (`.weights`)
+- `output_path`: Destination path for the Keras model (`.h5`)
+
+### Full YOLO Model Conversion
+
+For the full YOLO model with COCO classes:
+
+```bash
+./yad2k.py yolo.cfg yolo.weights model_data/yolo.h5
+```
+
+<Note>
+  The conversion process may take several minutes depending on your hardware and the model size.
+</Note>
+
+## Model Files Structure
+
+After conversion, you'll need three essential files for each model:
+
+### 1. Model File (`.h5`)
+
+The converted Keras model containing the neural network architecture and weights.
+
+**Location**: `model_data/tiny-yolo-voc.h5` or `model_data/yolo.h5`
+
+### 2. Anchors File
+
+Pre-defined anchor boxes used for object detection. These are specific to each model.
+
+**Tiny YOLO VOC Anchors** (`model_data/tiny-yolo-voc_anchors.txt`):
+```
+1.08,1.19,  3.42,4.41,  6.63,11.38,  9.42,5.11,  16.62,10.52
+```
+
+**Full YOLO Anchors** (`model_data/yolo_anchors.txt`):
+```
+0.57273, 0.677385, 1.87446, 2.06253, 3.33843, 5.47434, 7.88282, 3.52778, 9.77052, 9.16828
+```
+
+<Note>
+  The anchor values are defined in the `keras_yolo.py` file:
+  
+  ```python
+  voc_anchors = np.array(
+      [[1.08, 1.19], [3.42, 4.41], [6.63, 11.38], [9.42, 5.11], [16.62, 10.52]])
+  ```
+  
+  See `src/yad2k/models/keras_yolo.py:17-18`
+</Note>
+
+### 3. Classes File
+
+List of object classes the model can detect.
+
+**PASCAL VOC Classes** (`model_data/pascal_classes.txt`):
+```
+aeroplane
+bicycle
+bird
+boat
+bottle
+bus
+car
+cat
+chair
+cow
+diningtable
+dog
+horse
+motorbike
+person
+pottedplant
+sheep
+sofa
+train
+tvmonitor
+```
+
+<Note>
+  PASCAL VOC contains 20 object classes, while COCO contains 80 classes. Choose based on your detection needs.
+</Note>
+
+## Model Architecture
+
+The YAD2K conversion creates a Keras model using the Darknet-19 architecture:
+
+```python
+def darknet_body():
+    """Generate first 18 conv layers of Darknet-19."""
+    return compose(
+        DarknetConv2D_BN_Leaky(32, (3, 3)),
+        MaxPooling2D(),
+        DarknetConv2D_BN_Leaky(64, (3, 3)),
+        MaxPooling2D(),
+        bottleneck_block(128, 64),
+        MaxPooling2D(),
+        bottleneck_block(256, 128),
+        MaxPooling2D(),
+        bottleneck_x2_block(512, 256),
+        MaxPooling2D(),
+        bottleneck_x2_block(1024, 512))
+```
+
+*Source: `src/yad2k/models/keras_darknet19.py:51-65`*
+
+## Verification
+
+After conversion, verify your model files are in place:
+
+```bash
+ls -lh model_data/
+```
+
+You should see:
+- `tiny-yolo-voc.h5` (or `yolo.h5`)
+- `tiny-yolo-voc_anchors.txt` (or `yolo_anchors.txt`)
+- `pascal_classes.txt` (or `coco_classes.txt`)
+
+<Warning>
+  Ensure the model file, anchors, and classes match. Mixing Tiny YOLO VOC with COCO classes will result in errors.
+</Warning>
+
+## Troubleshooting
+
+### YAD2K Not Found
+
+If the `yad2k.py` script is not found, ensure you're in the correct directory:
+
+```bash
+cd src
+python -m yad2k.yad2k [config] [weights] [output]
+```
+
+### Conversion Errors
+
+If you encounter errors during conversion:
+
+1. Verify the `.cfg` and `.weights` files match the same YOLO version
+2. Check that you have sufficient disk space for the output `.h5` file
+3. Ensure all YAD2K dependencies are installed (Keras, TensorFlow, NumPy)
+
+### Model Validation
+
+To validate the converted model loads correctly:
+
+```python
+from keras.models import load_model
+
+# Load the converted model
+yolo_model = load_model('model_data/tiny-yolo-voc.h5')
+print(f'{yolo_model.layers[0].input_shape} model loaded successfully')
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Running Inference" icon="play" href="/guides/running-inference">
+    Learn how to use your converted model for object detection
+  </Card>
+  
+  <Card title="MQTT Integration" icon="network-wired" href="/guides/mqtt-integration">
+    Set up MQTT messaging for detection results
+  </Card>
+</CardGroup>

@@ -1,0 +1,183 @@
+---
+title: 'Docker Deployment on x86'
+description: 'Deploy YOLO-Pi using Docker on x86 architecture (Mac/Linux)'
+---
+
+## Overview
+
+YOLO-Pi can be deployed on x86 systems (MacBook, Linux workstations) using Docker. This is ideal for development and testing before deploying to Raspberry Pi hardware.
+
+<Note>
+  Building the Docker image takes approximately 20 minutes due to OpenCV compilation from source.
+</Note>
+
+## Prerequisites
+
+- Docker installed on your system
+- USB camera or built-in webcam
+- At least 4GB of available disk space
+
+## Building the Image
+
+<Steps>
+  <Step title="Navigate to source directory">
+    Clone the repository and navigate to the project root:
+    
+    ```bash
+    git clone <repository-url>
+    cd yolo-pi
+    ```
+  </Step>
+
+  <Step title="Build the Docker image">
+    Build the image using the x86 Dockerfile:
+    
+    ```bash
+    docker build -t ashya/yolo-pi --file Dockerfile.x86 .
+    ```
+    
+    This process will:
+    - Install Python 3.6 and dependencies
+    - Build OpenCV 3.3.0 from source with optimizations (AVX, TBB, V4L)
+    - Install TensorFlow 1.1.0, Keras 2.1.2, and other dependencies
+    - Copy application code to `/app`
+  </Step>
+
+  <Step title="Verify the build">
+    Check that the image was created successfully:
+    
+    ```bash
+    docker images | grep yolo-pi
+    ```
+  </Step>
+</Steps>
+
+## Running the Container
+
+### Interactive Mode
+
+Run the container interactively with camera access:
+
+```bash
+docker run -it --rm --privileged \
+  --device=/dev/video0:/dev/video0 \
+  -v `pwd`:/app \
+  ashya/yolopi /bin/bash
+```
+
+<Accordion title="Command breakdown">
+  - `-it`: Interactive terminal
+  - `--rm`: Remove container after exit
+  - `--privileged`: Grant extended privileges (required for some camera access)
+  - `--device=/dev/video0:/dev/video0`: Mount camera device
+  - `-v \`pwd\`:/app`: Mount current directory to /app (optional, for development)
+  - `/bin/bash`: Start bash shell instead of running application
+</Accordion>
+
+### Running the Application
+
+To run YOLO-Pi directly:
+
+```bash
+docker run -d --device=/dev/video0:/dev/video0 \
+  -e MQTT=<mqtt-server-ip> \
+  ashya/yolo-pi
+```
+
+<Warning>
+  You must set the `MQTT` environment variable to your MQTT broker's IP address or hostname. The application will fail to start without it.
+</Warning>
+
+## Camera Device Access
+
+### Linux
+
+On Linux, camera devices are typically `/dev/video0`. List available cameras:
+
+```bash
+ls -la /dev/video*
+```
+
+If your camera is on a different device (e.g., `/dev/video1`), adjust the `--device` flag:
+
+```bash
+--device=/dev/video1:/dev/video0
+```
+
+### macOS
+
+<Note>
+  Docker on macOS has limited USB device passthrough support. For testing on Mac, consider:
+  - Using a native Python environment with conda
+  - Running the container and accessing a network camera
+  - Testing with video files instead of live camera feed
+</Note>
+
+For macOS development, the native installation approach may be more suitable:
+
+```bash
+conda install -c jlaura opencv3=3.0.0
+pip install keras==2.1.2 tensorflow==1.1.0 pillow==4.3.0
+```
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Camera not detected">
+    Check that your user has permissions to access the camera device:
+    
+    ```bash
+    sudo usermod -aG video $USER
+    ```
+    
+    Then log out and back in for changes to take effect.
+  </Accordion>
+
+  <Accordion title="Build fails during OpenCV compilation">
+    Ensure you have enough disk space (at least 4GB) and memory (4GB+ recommended). 
+    
+    You can limit build parallelism to reduce memory usage by modifying the Dockerfile to use `make -j2 install` instead of `make install`.
+  </Accordion>
+
+  <Accordion title="MQTT connection error">
+    The application requires an MQTT broker. Ensure:
+    - The MQTT broker is running and accessible
+    - The `MQTT` environment variable is set correctly
+    - Port 1883 is open on the MQTT server
+    
+    Test connectivity:
+    ```bash
+    telnet <mqtt-server-ip> 1883
+    ```
+  </Accordion>
+
+  <Accordion title="OpenCV 3.1.1 crashes on Mac">
+    The project specifically uses OpenCV 3.0.0 due to stability issues with 3.1.1 on macOS. Stick with version 3.0.0 or use 3.3.0 as configured in the Dockerfile.
+  </Accordion>
+</AccordionGroup>
+
+## Image Details
+
+The x86 Docker image includes:
+
+- **Base Image**: `python:3.6`
+- **OpenCV**: 3.3.0 compiled with AVX, TBB, OpenGL, OpenCL, V4L support
+- **TensorFlow**: 1.1.0
+- **Keras**: 2.1.2
+- **Additional Libraries**: 
+  - NumPy (latest)
+  - Pillow 4.3.0
+  - h5py 2.7.1
+  - kafka-python
+  - paho-mqtt
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Raspberry Pi Deployment" icon="raspberry-pi" href="/deployment/docker-rpi">
+    Deploy to Raspberry Pi hardware
+  </Card>
+  <Card title="Production Setup" icon="server" href="/deployment/production">
+    Production deployment best practices
+  </Card>
+</CardGroup>

@@ -1,0 +1,350 @@
+---
+title: 'Docker Deployment on Raspberry Pi'
+description: 'Deploy YOLO-Pi on Raspberry Pi 3 using Docker with ARM architecture support'
+---
+
+## Overview
+
+Deploying YOLO-Pi on Raspberry Pi requires building an ARM-compatible Docker image with TensorFlow support. This process is resource-intensive and requires special preparation.
+
+<Warning>
+  Building the Docker image on Raspberry Pi 3 takes **several hours** (potentially 6-12 hours). Plan accordingly and use a screen session to allow disconnecting during the build.
+</Warning>
+
+## Prerequisites
+
+- Raspberry Pi 3 (or newer) with Raspbian Stretch
+- 2GB+ USB drive for swap space
+- Camera module or USB camera
+- At least 8GB SD card with 2-3GB free space
+- Stable internet connection
+
+## Setting Up Swap Space
+
+Raspberry Pi's limited RAM requires additional swap space to compile the Docker image.
+
+<Steps>
+  <Step title="Prepare USB drive">
+    Insert a 2GB+ USB drive and identify it (usually `/dev/sda`):
+    
+    ```bash
+    lsblk
+    ```
+    
+    Create a partition and format it:
+    
+    ```bash
+    sudo fdisk /dev/sda
+    # Press 'n' for new partition, then 'w' to write
+    
+    sudo mkfs.ext4 /dev/sda1
+    ```
+  </Step>
+
+  <Step title="Mount the USB drive">
+    Create a mount point and mount the drive:
+    
+    ```bash
+    sudo mkdir /usb
+    sudo mount /dev/sda1 /usb
+    ```
+  </Step>
+
+  <Step title="Configure automatic mounting">
+    Edit `/etc/fstab` to mount the USB drive on boot:
+    
+    ```bash
+    sudo nano /etc/fstab
+    ```
+    
+    Add this line:
+    
+    ```
+    /dev/sda1	/usb	ext4	defaults 0 0
+    ```
+    
+    Mount all filesystems:
+    
+    ```bash
+    sudo mount -a
+    ```
+  </Step>
+
+  <Step title="Configure swap file">
+    Edit the swap configuration:
+    
+    ```bash
+    sudo nano /etc/dphys-swapfile
+    ```
+    
+    Comment out existing `CONF_SWAPFILE` and `CONF_SWAPSIZE` lines and add:
+    
+    ```
+    CONF_SWAPFILE=/usb/swap
+    CONF_SWAPSIZE=2048
+    ```
+  </Step>
+
+  <Step title="Create and enable swap">
+    Recreate the swap file and enable it:
+    
+    ```bash
+    sudo dphys-swapfile setup
+    sudo dphys-swapfile swapon
+    ```
+    
+    Verify swap is active:
+    
+    ```bash
+    free -h
+    ```
+  </Step>
+</Steps>
+
+## Building the Docker Image
+
+<Steps>
+  <Step title="Start a screen session">
+    Use screen to prevent interruption if SSH disconnects:
+    
+    ```bash
+    screen -S docker-build
+    ```
+    
+    <Note>
+      To detach from screen: Press `Ctrl+A`, then `D`
+      
+      To reattach: `screen -r docker-build`
+    </Note>
+  </Step>
+
+  <Step title="Prepare build directory">
+    Create a build directory and copy the Dockerfile:
+    
+    ```bash
+    mkdir -p ~/src
+    cd ~/src
+    ```
+    
+    Copy `Dockerfile.rpi` to this directory as `Dockerfile`.
+  </Step>
+
+  <Step title="Download TensorFlow wheel">
+    Download the pre-compiled TensorFlow binary for ARM and rename it:
+    
+    ```bash
+    wget https://github.com/samjabrahams/tensorflow-on-raspberry-pi/releases/download/v1.1.0/tensorflow-1.1.0-cp34-cp34m-linux_armv7l.whl
+    
+    mv tensorflow-1.1.0-cp34-cp34m-linux_armv7l.whl \
+       tensorflow-1.1.0-cp35-cp35m-linux_armv7l.whl
+    ```
+    
+    <Accordion title="Why rename the wheel?">
+      The Dockerfile uses Python 3.5 (`cp35`), but the pre-compiled wheel is tagged for Python 3.4 (`cp34`). Renaming allows pip to install it for Python 3.5.
+    </Accordion>
+  </Step>
+
+  <Step title="Build the Docker image">
+    Start the build process:
+    
+    ```bash
+    docker build -t ashya/yolo-pi .
+    ```
+    
+    <Warning>
+      This will take **several hours**. Monitor progress periodically but expect long compilation times, especially for OpenCV.
+    </Warning>
+    
+    The build process:
+    - Installs system dependencies
+    - Installs NumPy, Keras 2.1.2, h5py, and paho-mqtt
+    - Installs TensorFlow 1.1.0 from the wheel file
+    - Compiles OpenCV 3.3.0 from source
+    - Copies application code
+  </Step>
+
+  <Step title="Verify the build">
+    Once complete, verify the image:
+    
+    ```bash
+    docker images | grep yolo-pi
+    ```
+  </Step>
+</Steps>
+
+## Running on Raspberry Pi
+
+### Interactive Mode
+
+Run interactively for testing:
+
+```bash
+docker run -it --rm --device /dev/video0 ashya/yolo-pi /bin/bash
+```
+
+### Daemon Mode
+
+Run as a background service:
+
+```bash
+docker run -d --device /dev/video0 \
+  -e MQTT=<mqtt-server-ip> \
+  --restart unless-stopped \
+  --name yolo-pi \
+  ashya/yolo-pi
+```
+
+<Accordion title="Command options explained">
+  - `-d`: Run in detached (daemon) mode
+  - `--device /dev/video0`: Grant access to camera
+  - `-e MQTT=<mqtt-server-ip>`: Set MQTT broker address
+  - `--restart unless-stopped`: Auto-restart on failure or reboot
+  - `--name yolo-pi`: Name the container for easy management
+</Accordion>
+
+## Running Automatically on Boot
+
+<Steps>
+  <Step title="Ensure Docker starts on boot">
+    Enable Docker service:
+    
+    ```bash
+    sudo systemctl enable docker
+    ```
+  </Step>
+
+  <Step title="Create container with restart policy">
+    Use the `--restart unless-stopped` flag when creating the container:
+    
+    ```bash
+    docker run -d --device /dev/video0 \
+      -e MQTT=192.168.1.100 \
+      --restart unless-stopped \
+      --name yolo-pi \
+      ashya/yolo-pi
+    ```
+  </Step>
+
+  <Step title="Verify auto-start">
+    Reboot and check that the container starts:
+    
+    ```bash
+    sudo reboot
+    # After reboot:
+    docker ps
+    ```
+  </Step>
+</Steps>
+
+## Managing the Container
+
+### View logs
+
+```bash
+docker logs -f yolo-pi
+```
+
+### Stop the container
+
+```bash
+docker stop yolo-pi
+```
+
+### Start the container
+
+```bash
+docker start yolo-pi
+```
+
+### Restart the container
+
+```bash
+docker restart yolo-pi
+```
+
+### Remove the container
+
+```bash
+docker rm -f yolo-pi
+```
+
+## Performance Considerations
+
+<Note>
+  YOLO-Pi on Raspberry Pi 3 processes approximately **1 frame every 2 seconds** using the tiny-yolo-voc model. This is expected behavior given the hardware constraints.
+</Note>
+
+### Optimization Tips
+
+- Use the `tiny-yolo-voc` model (smaller and faster than full YOLO)
+- Reduce camera resolution if needed
+- Ensure adequate cooling (heatsinks or fan)
+- Use a high-quality power supply (2.5A minimum)
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Build runs out of memory">
+    Ensure swap is properly configured and active:
+    
+    ```bash
+    free -h
+    swapon --show
+    ```
+    
+    You should see 2GB of swap space. If not, repeat the swap setup steps.
+  </Accordion>
+
+  <Accordion title="Build fails during OpenCV compilation">
+    This is often due to insufficient resources. Ensure:
+    - Swap space is active (2GB)
+    - No other heavy processes are running
+    - SD card has at least 2GB free space
+    
+    If it continues to fail, try building on a more powerful machine using cross-compilation.
+  </Accordion>
+
+  <Accordion title="Camera not accessible">
+    For Raspberry Pi Camera Module, ensure it's enabled:
+    
+    ```bash
+    sudo raspi-config
+    # Navigate to Interface Options > Camera > Enable
+    ```
+    
+    For USB cameras, verify the device:
+    ```bash
+    ls -la /dev/video*
+    ```
+  </Accordion>
+
+  <Accordion title="TensorFlow wheel installation fails">
+    Ensure you've renamed the wheel file correctly to match Python 3.5. The filename must be exactly:
+    
+    ```
+    tensorflow-1.1.0-cp35-cp35m-linux_armv7l.whl
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Image Details
+
+The Raspberry Pi Docker image includes:
+
+- **Base Image**: `resin/rpi-raspbian:stretch`
+- **OpenCV**: 3.3.0 compiled for ARM (without AVX/CUDA)
+- **TensorFlow**: 1.1.0 (pre-compiled ARM wheel)
+- **Keras**: 2.1.2
+- **MQTT Client**: paho-mqtt
+- **Additional Libraries**: NumPy, h5py 2.7.1, scipy, PIL
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Production Setup" icon="server" href="/deployment/production">
+    Learn about production deployment best practices
+  </Card>
+  <Card title="Running Inference" icon="code" href="/guides/running-inference">
+    Learn how to run and configure inference
+  </Card>
+</CardGroup>

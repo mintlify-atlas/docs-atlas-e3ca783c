@@ -1,0 +1,519 @@
+---
+title: 'keras_yolo.py'
+description: 'YOLO v2 model implementation in Keras with training and evaluation functions'
+---
+
+## Overview
+
+The `keras_yolo.py` module implements the YOLO v2 (You Only Look Once version 2) object detection architecture in Keras. It provides functions for building the model, processing outputs, computing loss, and evaluating predictions.
+
+## Model Architecture Functions
+
+### yolo_body()
+
+Creates the YOLO v2 CNN body architecture.
+
+```python
+yolo_body(inputs, num_anchors, num_classes)
+```
+
+#### Parameters
+
+<ParamField path="inputs" type="keras.Input" required>
+  Input tensor for the model.
+</ParamField>
+
+<ParamField path="num_anchors" type="int" required>
+  Number of anchor boxes per grid cell.
+</ParamField>
+
+<ParamField path="num_classes" type="int" required>
+  Number of object classes to detect.
+</ParamField>
+
+#### Returns
+
+<ResponseField name="model" type="keras.Model">
+  Keras Model with YOLO v2 architecture. Output shape is `(batch, grid_h, grid_w, num_anchors * (num_classes + 5))`.
+</ResponseField>
+
+#### Architecture Details
+
+1. **Darknet-19 Base**: Uses `darknet_body()` as feature extractor
+2. **Conv20 Layers**: Two additional 1024-filter 3x3 convolutions
+3. **Passthrough Layer**: Concatenates layer 43 output with conv20
+4. **Space-to-depth**: Reorganizes spatial data to depth dimension
+5. **Final Convolution**: Outputs predictions for anchors and classes
+
+```python
+darknet = Model(inputs, darknet_body()(inputs))
+conv20 = compose(
+    DarknetConv2D_BN_Leaky(1024, (3, 3)),
+    DarknetConv2D_BN_Leaky(1024, (3, 3)))(darknet.output)
+
+conv13 = darknet.layers[43].output
+conv21 = DarknetConv2D_BN_Leaky(64, (1, 1))(conv13)
+conv21_reshaped = Lambda(
+    space_to_depth_x2,
+    output_shape=space_to_depth_x2_output_shape,
+    name='space_to_depth')(conv21)
+
+x = concatenate([conv21_reshaped, conv20])
+x = DarknetConv2D_BN_Leaky(1024, (3, 3))(x)
+x = DarknetConv2D(num_anchors * (num_classes + 5), (1, 1))(x)
+```
+
+## Output Processing Functions
+
+### yolo_head()
+
+Converts final layer features to bounding box parameters.
+
+```python
+yolo_head(feats, anchors, num_classes)
+```
+
+#### Parameters
+
+<ParamField path="feats" type="tensor" required>
+  Final convolutional layer features from the YOLO model.
+</ParamField>
+
+<ParamField path="anchors" type="array-like" required>
+  Anchor box widths and heights. Shape: `(num_anchors, 2)`.
+</ParamField>
+
+<ParamField path="num_classes" type="int" required>
+  Number of target classes.
+</ParamField>
+
+#### Returns
+
+<ResponseField name="box_xy" type="tensor">
+  Box center coordinates (x, y) adjusted by spatial location in conv layer. Values are normalized to [0, 1].
+</ResponseField>
+
+<ResponseField name="box_wh" type="tensor">
+  Box dimensions (width, height) adjusted by anchors and conv spatial resolution. Values are normalized to [0, 1].
+</ResponseField>
+
+<ResponseField name="box_confidence" type="tensor">
+  Probability estimate for whether each box contains any object. Values in [0, 1].
+</ResponseField>
+
+<ResponseField name="box_class_probs" type="tensor">
+  Probability distribution over class labels for each box. Softmax normalized.
+</ResponseField>
+
+#### Processing Steps
+
+1. **Reshape Features**: Converts to `(batch, conv_h, conv_w, num_anchors, num_classes + 5)`
+2. **Extract Components**:
+   - `box_xy`: Sigmoid activation on first 2 values
+   - `box_wh`: Exponential on next 2 values
+   - `box_confidence`: Sigmoid on 5th value
+   - `box_class_probs`: Softmax on remaining values
+3. **Adjust Predictions**:
+   - Add grid cell offset to xy coordinates
+   - Multiply wh by anchor dimensions
+   - Normalize by grid dimensions
+
+```python
+box_xy = K.sigmoid(feats[..., :2])
+box_wh = K.exp(feats[..., 2:4])
+box_confidence = K.sigmoid(feats[..., 4:5])
+box_class_probs = K.softmax(feats[..., 5:])
+
+box_xy = (box_xy + conv_index) / conv_dims
+box_wh = box_wh * anchors_tensor / conv_dims
+```
+
+### yolo_boxes_to_corners()
+
+Converts YOLO box predictions to bounding box corners.
+
+```python
+yolo_boxes_to_corners(box_xy, box_wh)
+```
+
+#### Parameters
+
+<ParamField path="box_xy" type="tensor" required>
+  Box center coordinates from `yolo_head()`.
+</ParamField>
+
+<ParamField path="box_wh" type="tensor" required>
+  Box width and height from `yolo_head()`.
+</ParamField>
+
+#### Returns
+
+<ResponseField name="corners" type="tensor">
+  Bounding box corners in format `[y_min, x_min, y_max, x_max]`.
+</ResponseField>
+
+```python
+box_mins = box_xy - (box_wh / 2.)
+box_maxes = box_xy + (box_wh / 2.)
+
+return K.concatenate([
+    box_mins[..., 1:2],  # y_min
+    box_mins[..., 0:1],  # x_min
+    box_maxes[..., 1:2],  # y_max
+    box_maxes[..., 0:1]  # x_max
+])
+```
+
+## Filtering and Evaluation Functions
+
+### yolo_filter_boxes()
+
+Filters YOLO boxes based on object and class confidence.
+
+```python
+yolo_filter_boxes(boxes, box_confidence, box_class_probs, threshold=.6)
+```
+
+#### Parameters
+
+<ParamField path="boxes" type="tensor" required>
+  Bounding box coordinates in corner format.
+</ParamField>
+
+<ParamField path="box_confidence" type="tensor" required>
+  Object confidence scores.
+</ParamField>
+
+<ParamField path="box_class_probs" type="tensor" required>
+  Class probability distributions.
+</ParamField>
+
+<ParamField path="threshold" type="float" default="0.6">
+  Minimum score threshold for keeping boxes.
+</ParamField>
+
+#### Returns
+
+<ResponseField name="boxes" type="tensor">
+  Filtered bounding boxes that exceed the threshold.
+</ResponseField>
+
+<ResponseField name="scores" type="tensor">
+  Confidence scores for filtered boxes.
+</ResponseField>
+
+<ResponseField name="classes" type="tensor">
+  Predicted class indices for filtered boxes.
+</ResponseField>
+
+```python
+box_scores = box_confidence * box_class_probs
+box_classes = K.argmax(box_scores, axis=-1)
+box_class_scores = K.max(box_scores, axis=-1)
+prediction_mask = box_class_scores >= threshold
+
+boxes = tf.boolean_mask(boxes, prediction_mask)
+scores = tf.boolean_mask(box_class_scores, prediction_mask)
+classes = tf.boolean_mask(box_classes, prediction_mask)
+```
+
+### yolo_eval()
+
+Evaluates YOLO model on input and returns filtered boxes with non-maximum suppression.
+
+```python
+yolo_eval(yolo_outputs, image_shape, max_boxes=10, score_threshold=.6, iou_threshold=.5)
+```
+
+#### Parameters
+
+<ParamField path="yolo_outputs" type="tuple" required>
+  Tuple of `(box_xy, box_wh, box_confidence, box_class_probs)` from `yolo_head()`.
+</ParamField>
+
+<ParamField path="image_shape" type="tensor" required>
+  Original image shape as `[height, width]`.
+</ParamField>
+
+<ParamField path="max_boxes" type="int" default="10">
+  Maximum number of boxes to return after NMS.
+</ParamField>
+
+<ParamField path="score_threshold" type="float" default="0.6">
+  Minimum score for box filtering.
+</ParamField>
+
+<ParamField path="iou_threshold" type="float" default="0.5">
+  IoU threshold for non-maximum suppression.
+</ParamField>
+
+#### Returns
+
+<ResponseField name="boxes" type="tensor">
+  Final bounding boxes scaled to original image dimensions. Shape: `(num_boxes, 4)`.
+</ResponseField>
+
+<ResponseField name="scores" type="tensor">
+  Confidence scores for final boxes. Shape: `(num_boxes,)`.
+</ResponseField>
+
+<ResponseField name="classes" type="tensor">
+  Class indices for final boxes. Shape: `(num_boxes,)`.
+</ResponseField>
+
+#### Processing Pipeline
+
+1. Convert boxes to corner format
+2. Filter by score threshold
+3. Scale boxes to original image size
+4. Apply non-maximum suppression
+5. Return top-k boxes
+
+```python
+box_xy, box_wh, box_confidence, box_class_probs = yolo_outputs
+boxes = yolo_boxes_to_corners(box_xy, box_wh)
+boxes, scores, classes = yolo_filter_boxes(
+    boxes, box_confidence, box_class_probs, threshold=score_threshold)
+
+# Scale boxes back to original image shape
+height = image_shape[0]
+width = image_shape[1]
+image_dims = K.stack([height, width, height, width])
+image_dims = K.reshape(image_dims, [1, 4])
+boxes = boxes * image_dims
+
+# Non-maximum suppression
+max_boxes_tensor = K.variable(max_boxes, dtype='int32')
+K.get_session().run(tf.variables_initializer([max_boxes_tensor]))
+nms_index = tf.image.non_max_suppression(
+    boxes, scores, max_boxes_tensor, iou_threshold=iou_threshold)
+boxes = K.gather(boxes, nms_index)
+scores = K.gather(scores, nms_index)
+classes = K.gather(classes, nms_index)
+```
+
+## Training Functions
+
+### yolo_loss()
+
+YOLO localization loss function for training.
+
+```python
+yolo_loss(args, anchors, num_classes, rescore_confidence=False, print_loss=False)
+```
+
+#### Parameters
+
+<ParamField path="args" type="tuple" required>
+  Tuple of `(yolo_output, true_boxes, detectors_mask, matching_true_boxes)`.
+</ParamField>
+
+<ParamField path="yolo_output" type="tensor" required>
+  Final convolutional layer features from the model.
+</ParamField>
+
+<ParamField path="true_boxes" type="tensor" required>
+  Ground truth boxes with shape `[batch, num_true_boxes, 5]`. Contains box x_center, y_center, width, height, and class.
+</ParamField>
+
+<ParamField path="detectors_mask" type="array" required>
+  Binary mask (0/1) for detector positions where there is a matching ground truth.
+</ParamField>
+
+<ParamField path="matching_true_boxes" type="array" required>
+  Corresponding ground truth boxes for positive detector positions, adjusted for conv height and width.
+</ParamField>
+
+<ParamField path="anchors" type="tensor" required>
+  Anchor boxes for the model.
+</ParamField>
+
+<ParamField path="num_classes" type="int" required>
+  Number of object classes.
+</ParamField>
+
+<ParamField path="rescore_confidence" type="bool" default="False">
+  If `True`, set confidence target to IoU of best predicted box with closest matching ground truth.
+</ParamField>
+
+<ParamField path="print_loss" type="bool" default="False">
+  If `True`, use `tf.Print()` to print loss components during training.
+</ParamField>
+
+#### Returns
+
+<ResponseField name="total_loss" type="float">
+  Mean localization loss across the minibatch.
+</ResponseField>
+
+#### Loss Components
+
+The total loss combines four components:
+
+1. **Confidence Loss** (objects): Penalizes incorrect confidence for boxes with objects
+2. **Confidence Loss** (no objects): Penalizes false positives
+3. **Classification Loss**: Penalizes incorrect class predictions
+4. **Coordinate Loss**: Penalizes incorrect box coordinates
+
+```python
+object_scale = 5
+no_object_scale = 1
+class_scale = 1
+coordinates_scale = 1
+
+total_loss = 0.5 * (
+    confidence_loss_sum + classification_loss_sum + coordinates_loss_sum)
+```
+
+### preprocess_true_boxes()
+
+Finds the detector position in YOLO grid where each ground truth box should appear.
+
+```python
+preprocess_true_boxes(true_boxes, anchors, image_size)
+```
+
+#### Parameters
+
+<ParamField path="true_boxes" type="array" required>
+  Ground truth boxes in form of relative `[x, y, w, h, class]`. Coordinates are in range [0, 1] as percentage of original image dimensions.
+</ParamField>
+
+<ParamField path="anchors" type="array" required>
+  Anchor boxes in form of `[w, h]`. Assumed to be in range [0, conv_size] where conv_size is the spatial dimension of final conv features.
+</ParamField>
+
+<ParamField path="image_size" type="array-like" required>
+  Image dimensions as `[height, width]` in pixels.
+</ParamField>
+
+#### Returns
+
+<ResponseField name="detectors_mask" type="array">
+  Binary mask with shape `[conv_height, conv_width, num_anchors, 1]` indicating detector positions to compare with ground truth.
+</ResponseField>
+
+<ResponseField name="matching_true_boxes" type="array">
+  Ground truth boxes adjusted for comparison with predicted parameters. Same shape as `detectors_mask` with box parameters.
+</ResponseField>
+
+#### Algorithm
+
+1. Downsamples ground truth to conv grid (32x downsampling)
+2. For each ground truth box:
+   - Finds grid cell containing box center
+   - Computes IoU with each anchor
+   - Assigns to anchor with highest IoU
+3. Adjusts box parameters for training:
+   - Offsets relative to grid cell
+   - Log-space width/height relative to anchor
+
+```python
+conv_height = height // 32
+conv_width = width // 32
+
+for box in true_boxes:
+    box_class = box[4:5]
+    box = box[0:4] * np.array([conv_width, conv_height, conv_width, conv_height])
+    i = np.floor(box[1]).astype('int')  # grid row
+    j = np.floor(box[0]).astype('int')  # grid col
+    
+    # Find best anchor
+    best_iou = 0
+    best_anchor = 0
+    for k, anchor in enumerate(anchors):
+        iou = compute_iou(box[2:4], anchor)
+        if iou > best_iou:
+            best_iou = iou
+            best_anchor = k
+    
+    if best_iou > 0:
+        detectors_mask[i, j, best_anchor] = 1
+        adjusted_box = np.array([
+            box[0] - j,  # x offset from grid cell
+            box[1] - i,  # y offset from grid cell
+            np.log(box[2] / anchors[best_anchor][0]),  # log w
+            np.log(box[3] / anchors[best_anchor][1]),  # log h
+            box_class
+        ])
+        matching_true_boxes[i, j, best_anchor] = adjusted_box
+```
+
+## Constants
+
+### VOC Anchors
+
+```python
+voc_anchors = np.array([
+    [1.08, 1.19], 
+    [3.42, 4.41], 
+    [6.63, 11.38], 
+    [9.42, 5.11], 
+    [16.62, 10.52]
+])
+```
+
+Predefined anchor boxes for Pascal VOC dataset.
+
+### VOC Classes
+
+```python
+voc_classes = [
+    "aeroplane", "bicycle", "bird", "boat", "bottle", "bus", "car", "cat",
+    "chair", "cow", "diningtable", "dog", "horse", "motorbike", "person",
+    "pottedplant", "sheep", "sofa", "train", "tvmonitor"
+]
+```
+
+20 object classes from Pascal VOC dataset.
+
+## Usage Example
+
+### Building a Model
+
+```python
+from keras.layers import Input
+from keras_yolo import yolo_body, yolo_head, yolo_eval
+
+# Create model
+inputs = Input(shape=(416, 416, 3))
+num_anchors = 5
+num_classes = 20
+
+model = yolo_body(inputs, num_anchors, num_classes)
+
+# Process outputs
+anchors = voc_anchors
+yolo_outputs = yolo_head(model.output, anchors, num_classes)
+
+# Evaluation
+image_shape = K.placeholder(shape=(2,))
+boxes, scores, classes = yolo_eval(
+    yolo_outputs,
+    image_shape,
+    max_boxes=10,
+    score_threshold=0.3,
+    iou_threshold=0.5
+)
+```
+
+### Training
+
+```python
+from keras_yolo import yolo_loss, preprocess_true_boxes
+
+# Prepare training data
+detectors_mask, matching_true_boxes = preprocess_true_boxes(
+    true_boxes, anchors, image_size=(416, 416)
+)
+
+# Compile model with custom loss
+model.compile(
+    optimizer='adam',
+    loss=lambda y_true, y_pred: yolo_loss(
+        (y_pred, true_boxes, detectors_mask, matching_true_boxes),
+        anchors,
+        num_classes
+    )
+)
+```

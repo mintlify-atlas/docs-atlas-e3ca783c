@@ -1,0 +1,441 @@
+---
+title: 'keras_darknet19.py'
+description: 'Darknet-19 architecture implementation in Keras for feature extraction'
+---
+
+## Overview
+
+The `keras_darknet19.py` module implements the Darknet-19 convolutional neural network architecture in Keras. Darknet-19 serves as the feature extraction backbone for YOLO v2, providing efficient and effective feature representations for object detection.
+
+## Architecture Components
+
+### DarknetConv2D
+
+Wrapper for Conv2D with Darknet-specific configuration.
+
+```python
+DarknetConv2D(*args, **kwargs)
+```
+
+#### Features
+
+<ParamField path="kernel_regularizer" type="regularizer" default="l2(5e-4)">
+  L2 regularization with weight decay of 0.0005 applied to all convolution kernels.
+</ParamField>
+
+<ParamField path="padding" type="string" default="same">
+  Padding mode for convolutions. Always uses 'same' padding to preserve spatial dimensions.
+</ParamField>
+
+```python
+@functools.wraps(Conv2D)
+def DarknetConv2D(*args, **kwargs):
+    """Wrapper to set Darknet weight regularizer for Convolution2D."""
+    darknet_conv_kwargs = {'kernel_regularizer': l2(5e-4)}
+    darknet_conv_kwargs.update(kwargs)
+    return _DarknetConv2D(*args, **darknet_conv_kwargs)
+```
+
+#### Usage
+
+```python
+from keras_darknet19 import DarknetConv2D
+
+# Create a convolution layer with Darknet defaults
+layer = DarknetConv2D(64, (3, 3), activation='relu')
+```
+
+### DarknetConv2D_BN_Leaky
+
+Convolution block with Batch Normalization and Leaky ReLU activation.
+
+```python
+DarknetConv2D_BN_Leaky(*args, **kwargs)
+```
+
+#### Architecture
+
+This function composes three layers in sequence:
+
+1. **DarknetConv2D**: Convolution without bias (since BN follows)
+2. **BatchNormalization**: Normalizes activations
+3. **LeakyReLU**: Leaky ReLU with alpha=0.1
+
+<ParamField path="use_bias" type="bool" default="False">
+  Bias is disabled since Batch Normalization includes bias parameters.
+</ParamField>
+
+<ParamField path="alpha" type="float" default="0.1">
+  Negative slope coefficient for Leaky ReLU activation.
+</ParamField>
+
+```python
+def DarknetConv2D_BN_Leaky(*args, **kwargs):
+    """Darknet Convolution2D followed by BatchNormalization and LeakyReLU."""
+    no_bias_kwargs = {'use_bias': False}
+    no_bias_kwargs.update(kwargs)
+    return compose(
+        DarknetConv2D(*args, **no_bias_kwargs),
+        BatchNormalization(),
+        LeakyReLU(alpha=0.1))
+```
+
+#### Usage
+
+```python
+from keras_darknet19 import DarknetConv2D_BN_Leaky
+
+# Create a conv-bn-leaky block
+layer = DarknetConv2D_BN_Leaky(128, (3, 3))
+```
+
+## Building Blocks
+
+### bottleneck_block()
+
+Bottleneck block with three convolutions: 3x3, 1x1, 3x3.
+
+```python
+bottleneck_block(outer_filters, bottleneck_filters)
+```
+
+#### Parameters
+
+<ParamField path="outer_filters" type="int" required>
+  Number of filters for the 3x3 convolutions (first and last).
+</ParamField>
+
+<ParamField path="bottleneck_filters" type="int" required>
+  Number of filters for the 1x1 convolution (middle layer).
+</ParamField>
+
+#### Returns
+
+<ResponseField name="block" type="function">
+  Composed function that applies the bottleneck block to an input tensor.
+</ResponseField>
+
+#### Architecture
+
+```
+Input
+  |
+  v
+[Conv 3x3, outer_filters] + BN + LeakyReLU
+  |
+  v
+[Conv 1x1, bottleneck_filters] + BN + LeakyReLU
+  |
+  v
+[Conv 3x3, outer_filters] + BN + LeakyReLU
+  |
+  v
+Output
+```
+
+```python
+def bottleneck_block(outer_filters, bottleneck_filters):
+    """Bottleneck block of 3x3, 1x1, 3x3 convolutions."""
+    return compose(
+        DarknetConv2D_BN_Leaky(outer_filters, (3, 3)),
+        DarknetConv2D_BN_Leaky(bottleneck_filters, (1, 1)),
+        DarknetConv2D_BN_Leaky(outer_filters, (3, 3)))
+```
+
+### bottleneck_x2_block()
+
+Extended bottleneck block with five convolutions: 3x3, 1x1, 3x3, 1x1, 3x3.
+
+```python
+bottleneck_x2_block(outer_filters, bottleneck_filters)
+```
+
+#### Parameters
+
+<ParamField path="outer_filters" type="int" required>
+  Number of filters for the 3x3 convolutions.
+</ParamField>
+
+<ParamField path="bottleneck_filters" type="int" required>
+  Number of filters for the 1x1 convolutions.
+</ParamField>
+
+#### Returns
+
+<ResponseField name="block" type="function">
+  Composed function that applies the extended bottleneck block.
+</ResponseField>
+
+#### Architecture
+
+```
+Input
+  |
+  v
+[bottleneck_block(outer_filters, bottleneck_filters)]
+  |
+  v
+[Conv 1x1, bottleneck_filters] + BN + LeakyReLU
+  |
+  v
+[Conv 3x3, outer_filters] + BN + LeakyReLU
+  |
+  v
+Output
+```
+
+```python
+def bottleneck_x2_block(outer_filters, bottleneck_filters):
+    """Bottleneck block of 3x3, 1x1, 3x3, 1x1, 3x3 convolutions."""
+    return compose(
+        bottleneck_block(outer_filters, bottleneck_filters),
+        DarknetConv2D_BN_Leaky(bottleneck_filters, (1, 1)),
+        DarknetConv2D_BN_Leaky(outer_filters, (3, 3)))
+```
+
+## Main Architecture
+
+### darknet_body()
+
+Generates the first 18 convolutional layers of Darknet-19.
+
+```python
+darknet_body()
+```
+
+#### Returns
+
+<ResponseField name="body" type="function">
+  Composed function that builds the Darknet-19 feature extraction layers.
+</ResponseField>
+
+#### Architecture
+
+The Darknet-19 body consists of:
+
+1. **Conv1**: 32 filters, 3x3, followed by MaxPooling
+2. **Conv2**: 64 filters, 3x3, followed by MaxPooling
+3. **Conv3-5**: Bottleneck block (128/64), followed by MaxPooling
+4. **Conv6-8**: Bottleneck block (256/128), followed by MaxPooling
+5. **Conv9-13**: Extended bottleneck block (512/256), followed by MaxPooling
+6. **Conv14-18**: Extended bottleneck block (1024/512)
+
+```python
+def darknet_body():
+    """Generate first 18 conv layers of Darknet-19."""
+    return compose(
+        DarknetConv2D_BN_Leaky(32, (3, 3)),
+        MaxPooling2D(),
+        DarknetConv2D_BN_Leaky(64, (3, 3)),
+        MaxPooling2D(),
+        bottleneck_block(128, 64),
+        MaxPooling2D(),
+        bottleneck_block(256, 128),
+        MaxPooling2D(),
+        bottleneck_x2_block(512, 256),
+        MaxPooling2D(),
+        bottleneck_x2_block(1024, 512))
+```
+
+#### Feature Map Progression
+
+For input size 416x416:
+
+```
+Input:          416 x 416 x 3
+Conv1 + Pool:   208 x 208 x 32
+Conv2 + Pool:   104 x 104 x 64
+Conv3-5 + Pool: 52 x 52 x 128
+Conv6-8 + Pool: 26 x 26 x 256
+Conv9-13 + Pool: 13 x 13 x 512
+Conv14-18:       13 x 13 x 1024
+```
+
+### darknet19()
+
+Generates complete Darknet-19 model for ImageNet classification.
+
+```python
+darknet19(inputs)
+```
+
+#### Parameters
+
+<ParamField path="inputs" type="keras.Input" required>
+  Input tensor for the model. Typically shape `(224, 224, 3)` or `(416, 416, 3)`.
+</ParamField>
+
+#### Returns
+
+<ResponseField name="model" type="keras.Model">
+  Complete Darknet-19 model with 1000-class ImageNet classification head.
+</ResponseField>
+
+```python
+def darknet19(inputs):
+    """Generate Darknet-19 model for Imagenet classification."""
+    body = darknet_body()(inputs)
+    logits = DarknetConv2D(1000, (1, 1), activation='softmax')(body)
+    return Model(inputs, logits)
+```
+
+#### Classification Head
+
+The final layer uses:
+- 1x1 convolution to reduce spatial features to class predictions
+- 1000 filters (one per ImageNet class)
+- Softmax activation for probability distribution
+
+## Usage Examples
+
+### Feature Extraction for YOLO
+
+```python
+from keras.layers import Input
+from keras.models import Model
+from keras_darknet19 import darknet_body
+
+# Create feature extractor
+inputs = Input(shape=(416, 416, 3))
+features = darknet_body()(inputs)
+feature_extractor = Model(inputs, features)
+
+print(feature_extractor.summary())
+# Output shape: (None, 13, 13, 1024)
+```
+
+### ImageNet Classification
+
+```python
+from keras.layers import Input
+from keras_darknet19 import darknet19
+
+# Create full classification model
+inputs = Input(shape=(224, 224, 3))
+model = darknet19(inputs)
+
+# Compile for training
+model.compile(
+    optimizer='adam',
+    loss='categorical_crossentropy',
+    metrics=['accuracy']
+)
+
+print(model.summary())
+```
+
+### Custom Architecture
+
+```python
+from keras.layers import Input, GlobalAveragePooling2D, Dense
+from keras.models import Model
+from keras_darknet19 import darknet_body
+
+# Custom classifier using Darknet-19 features
+inputs = Input(shape=(416, 416, 3))
+features = darknet_body()(inputs)
+
+# Add custom head
+x = GlobalAveragePooling2D()(features)
+x = Dense(256, activation='relu')(x)
+outputs = Dense(10, activation='softmax')(x)  # 10 custom classes
+
+model = Model(inputs, outputs)
+```
+
+### Using Building Blocks
+
+```python
+from keras.layers import Input
+from keras.models import Model
+from keras_darknet19 import DarknetConv2D_BN_Leaky, bottleneck_block
+from ..utils import compose
+
+# Build custom architecture
+inputs = Input(shape=(256, 256, 3))
+
+x = compose(
+    DarknetConv2D_BN_Leaky(64, (3, 3)),
+    DarknetConv2D_BN_Leaky(128, (3, 3)),
+    bottleneck_block(256, 128),
+    DarknetConv2D_BN_Leaky(512, (3, 3))
+)(inputs)
+
+model = Model(inputs, x)
+```
+
+## Design Principles
+
+### Regularization
+
+All convolutional layers use L2 regularization with weight decay of 0.0005 to prevent overfitting:
+
+```python
+kernel_regularizer=l2(5e-4)
+```
+
+### Batch Normalization
+
+Batch normalization is applied after every convolution (before activation) to:
+- Stabilize training
+- Reduce internal covariate shift
+- Allow higher learning rates
+- Provide regularization effect
+
+### Leaky ReLU
+
+Leaky ReLU with alpha=0.1 is used instead of standard ReLU to:
+- Prevent dying neurons
+- Allow gradients to flow for negative values
+- Improve gradient flow during backpropagation
+
+### Bottleneck Design
+
+Bottleneck blocks use 1x1 convolutions to:
+- Reduce computational cost
+- Decrease number of parameters
+- Increase network depth without excessive computation
+- Create multi-scale feature representations
+
+## Model Statistics
+
+### Darknet-19 Parameters
+
+- **Total layers**: 19 convolutional layers + 5 max pooling
+- **Parameters**: ~20.8 million (for ImageNet version)
+- **Feature extractor**: 18 layers (without classification head)
+- **Output features**: 1024 channels at 13x13 spatial resolution (for 416x416 input)
+
+### Computational Efficiency
+
+Darknet-19 is designed to be efficient:
+- Fewer parameters than VGG-16 or ResNet-50
+- Faster inference time
+- Suitable for resource-constrained devices (Raspberry Pi)
+- Good balance between accuracy and speed
+
+## Pre-trained Weights
+
+Darknet-19 can be initialized with pre-trained ImageNet weights for transfer learning. The YOLO-Pi project uses pre-trained weights converted from the original Darknet framework.
+
+```python
+# Load pre-trained weights (example)
+model = darknet19(inputs)
+model.load_weights('darknet19_weights.h5')
+```
+
+## Integration with YOLO
+
+In YOLO v2, `darknet_body()` serves as the base feature extractor:
+
+```python
+from keras_yolo import yolo_body
+from keras_darknet19 import darknet_body
+
+# YOLO v2 uses darknet_body for features
+inputs = Input(shape=(416, 416, 3))
+model = yolo_body(inputs, num_anchors=5, num_classes=20)
+# Internally uses: darknet = Model(inputs, darknet_body()(inputs))
+```
+
+The 13th layer output (layer 43 in the full model) is also used in YOLO's passthrough layer for multi-scale detection.

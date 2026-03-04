@@ -1,0 +1,327 @@
+---
+title: Raspberry Pi Setup
+description: Configure YOLO-Pi on Raspberry Pi 3 with USB camera support and optimized performance
+---
+
+## Overview
+
+YOLO-Pi can run on Raspberry Pi 3 and newer models. Due to the computational requirements of deep learning inference, compilation and runtime performance require special configuration.
+
+<Warning>
+Compiling dependencies on Raspberry Pi takes several hours and requires a USB swap drive with at least 2GB of space.
+</Warning>
+
+## Hardware Requirements
+
+- **Raspberry Pi 3 or newer** (RPi 3+ recommended)
+- **USB camera** or **Pi Camera Module** (connected to camera port)
+- **USB drive** with at least 2GB for swap space
+- **4GB+ microSD card** for OS and application
+- **Stable power supply** (2.5A recommended)
+
+## Performance Expectations
+
+<Note>
+On a Raspberry Pi 3, expect approximately **0.5 FPS** (1 frame every 2 seconds). This is significantly slower than running on a laptop or desktop computer, but sufficient for many real-time detection applications.
+</Note>
+
+## USB Swap Setup
+
+Compiling OpenCV and TensorFlow requires more RAM than the Raspberry Pi provides. A USB swap drive extends available memory.
+
+<Steps>
+  <Step title="Prepare USB Drive">
+    Insert a USB drive (at least 2GB) and partition it:
+    
+    ```bash
+    sudo fdisk /dev/sda
+    ```
+    
+    Create a new partition, then format it:
+    
+    ```bash
+    sudo mkfs.ext4 /dev/sda1
+    sudo mkdir /usb
+    ```
+  </Step>
+
+  <Step title="Configure Auto-Mount">
+    Edit `/etc/fstab` to automatically mount the USB drive:
+    
+    ```bash
+    sudo nano /etc/fstab
+    ```
+    
+    Add this line:
+    
+    ```
+    /dev/sda1	/usb	ext4	defaults 0 0
+    ```
+    
+    Mount the drive:
+    
+    ```bash
+    sudo mount -a
+    ```
+  </Step>
+
+  <Step title="Configure Swap File">
+    Edit `/etc/dphys-swapfile`:
+    
+    ```bash
+    sudo nano /etc/dphys-swapfile
+    ```
+    
+    Comment out existing `CONF_SWAPFILE` and `CONF_SWAPSIZE` settings and add:
+    
+    ```
+    CONF_SWAPFILE=/usb/swap
+    CONF_SWAPSIZE=2048
+    ```
+  </Step>
+
+  <Step title="Enable Swap">
+    Recreate and activate the swap file:
+    
+    ```bash
+    sudo dphys-swapfile setup
+    sudo dphys-swapfile swapon
+    ```
+    
+    Verify swap is active:
+    
+    ```bash
+    free -h
+    ```
+  </Step>
+</Steps>
+
+<Note>
+Swap setup instructions are courtesy of [this guide](https://pithings.wordpress.com/2016/06/03/how-to-mount-a-usb-drive-and-move-the-swap-file-on-raspbian/).
+</Note>
+
+## Camera Setup
+
+YOLO-Pi supports both USB cameras and the Raspberry Pi Camera Module.
+
+<Accordion title="USB Camera">
+  USB cameras are automatically detected as `/dev/video0`. Verify your camera:
+  
+  ```bash
+  ls -l /dev/video0
+  ```
+  
+  Test video capture:
+  
+  ```bash
+  v4l2-ctl --list-devices
+  ```
+  
+  The YOLO-Pi script uses OpenCV's `cv2.VideoCapture(0)` to access the camera.
+</Accordion>
+
+<Accordion title="Pi Camera Module">
+  The Raspberry Pi Camera Module connects to the camera port on the board.
+  
+  Enable the camera:
+  
+  ```bash
+  sudo raspi-config
+  # Navigate to Interface Options > Camera > Enable
+  ```
+  
+  You may need to use `raspivid` or configure OpenCV to use the camera module instead of `/dev/video0`.
+</Accordion>
+
+## Docker Installation (Recommended)
+
+The easiest way to run YOLO-Pi on Raspberry Pi is using Docker. This handles all dependency compilation automatically.
+
+<Steps>
+  <Step title="Install Docker">
+    ```bash
+    curl -fsSL https://get.docker.com -o get-docker.sh
+    sudo sh get-docker.sh
+    sudo usermod -aG docker $USER
+    ```
+    
+    Log out and back in for group changes to take effect.
+  </Step>
+
+  <Step title="Prepare TensorFlow Wheel">
+    Download the pre-compiled TensorFlow binary for ARM:
+    
+    ```bash
+    cd ~/src
+    wget https://github.com/samjabrahams/tensorflow-on-raspberry-pi/releases/download/v1.1.0/tensorflow-1.1.0-cp34-cp34m-linux_armv7l.whl
+    mv tensorflow-1.1.0-cp34-cp34m-linux_armv7l.whl tensorflow-1.1.0-cp35-cp35m-linux_armv7l.whl
+    ```
+    
+    <Note>
+    We rename the wheel file to match Python 3.5 compatibility.
+    </Note>
+  </Step>
+
+  <Step title="Build Docker Image">
+    Copy `Dockerfile.rpi` to your source directory and build:
+    
+    ```bash
+    docker build -t ashya/yolo-pi -f Dockerfile.rpi .
+    ```
+    
+    <Warning>
+    This build process takes **several hours** on Raspberry Pi 3. Use `screen` to maintain your session:
+    
+    ```bash
+    screen
+    docker build -t ashya/yolo-pi -f Dockerfile.rpi .
+    # Press Ctrl+A then D to detach
+    # Later: screen -r to reattach
+    ```
+    </Warning>
+  </Step>
+
+  <Step title="Run Container">
+    Run YOLO-Pi with camera access:
+    
+    ```bash
+    docker run -it --rm --device /dev/video0 ashya/yolo-pi /bin/bash
+    ```
+    
+    Or run automatically in detached mode:
+    
+    ```bash
+    docker run -d --device /dev/video0 ashya/yolo-pi
+    ```
+  </Step>
+</Steps>
+
+## Manual Installation
+
+If you prefer not to use Docker, you can install dependencies manually. Follow the [installation guide](/setup/installation), but note these Raspberry Pi-specific requirements:
+
+### System Packages
+
+Install required system libraries:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y \
+  build-essential cmake git wget unzip yasm pkg-config \
+  libswscale-dev libtbb2 libtbb-dev libjpeg-dev libpng-dev \
+  libtiff-dev libjasper-dev libavformat-dev libpq-dev \
+  libgtk2.0-dev python3 python3-pip python3-setuptools \
+  python3-dev libblas-dev liblapack-dev libhdf5-dev \
+  python3-h5py python3-scipy python3-pil
+```
+
+### Python Packages
+
+```bash
+pip3 install numpy keras==2.1.2 paho-mqtt h5py==2.7.1
+```
+
+### TensorFlow for ARM
+
+Use the pre-compiled wheel:
+
+```bash
+wget https://github.com/samjabrahams/tensorflow-on-raspberry-pi/releases/download/v1.1.0/tensorflow-1.1.0-cp34-cp34m-linux_armv7l.whl
+mv tensorflow-1.1.0-cp34-cp34m-linux_armv7l.whl tensorflow-1.1.0-cp35-cp35m-linux_armv7l.whl
+pip3 install ./tensorflow-1.1.0-cp35-cp35m-linux_armv7l.whl
+```
+
+### OpenCV 3.3.0
+
+Build OpenCV from source (requires 2+ hours):
+
+```bash
+wget https://github.com/opencv/opencv/archive/3.3.0.zip
+unzip 3.3.0.zip
+mkdir /opencv-3.3.0/cmake_binary
+cd /opencv-3.3.0/cmake_binary
+
+cmake -DBUILD_TIFF=ON \
+  -DBUILD_opencv_java=OFF \
+  -DWITH_CUDA=OFF \
+  -DBUILD_TESTS=OFF \
+  -DBUILD_PERF_TESTS=OFF \
+  -DCMAKE_BUILD_TYPE=RELEASE \
+  -DCMAKE_INSTALL_PREFIX=$(python3 -c "import sys; print(sys.prefix)") \
+  -DPYTHON_EXECUTABLE=$(which python3) \
+  -DPYTHON_INCLUDE_DIR=$(python3 -c "from distutils.sysconfig import get_python_inc; print(get_python_inc())") \
+  -DPYTHON_PACKAGES_PATH=$(python3 -c "from distutils.sysconfig import get_python_lib; print(get_python_lib())") ..
+
+make install
+```
+
+## Running YOLO-Pi
+
+Set the MQTT server environment variable and run:
+
+```bash
+export MQTT=your-mqtt-server-ip
+python3 yolo-pi.py
+```
+
+The script will:
+1. Connect to the MQTT server
+2. Load the YOLO model (tiny-yolo-voc.h5)
+3. Start video capture from `/dev/video0`
+4. Publish detected objects to the MQTT topic `yolo`
+
+## Optimization Tips
+
+<Card title="Use Tiny YOLO" icon="bolt">
+  The Tiny YOLO VOC model is optimized for embedded devices and provides the best performance on Raspberry Pi.
+</Card>
+
+<Card title="Disable Video Preview" icon="eye-slash">
+  The default configuration has video preview disabled (line 174 in yolo-pi.py is commented out) to save resources.
+</Card>
+
+<Card title="Overclock (Advanced)" icon="gauge-high">
+  Consider overclocking your Raspberry Pi for better performance, but ensure adequate cooling.
+</Card>
+
+## Troubleshooting
+
+<Accordion title="Camera not detected">
+  Check device permissions:
+  
+  ```bash
+  ls -l /dev/video0
+  sudo usermod -aG video $USER
+  ```
+  
+  Reboot after adding to the video group.
+</Accordion>
+
+<Accordion title="Out of memory during compilation">
+  Ensure your swap file is active:
+  
+  ```bash
+  free -h
+  sudo dphys-swapfile swapon
+  ```
+</Accordion>
+
+<Accordion title="MQTT connection failed">
+  Verify the MQTT environment variable:
+  
+  ```bash
+  echo $MQTT
+  export MQTT=192.168.1.100  # Your MQTT server IP
+  ```
+</Accordion>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Docker Setup" icon="docker" href="/setup/docker">
+    Learn more about Docker deployment options
+  </Card>
+  <Card title="Running Inference" icon="gear" href="/guides/running-inference">
+    Configure model paths and run detection
+  </Card>
+</CardGroup>

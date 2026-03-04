@@ -1,0 +1,189 @@
+---
+title: 'utils'
+description: 'Miscellaneous utility functions for YAD2K'
+---
+
+## Overview
+
+The `utils` module provides general-purpose utility functions used throughout the YAD2K project.
+
+## Functions
+
+### compose()
+
+Compose multiple functions into a single function, evaluated left to right.
+
+```python
+def compose(*funcs)
+```
+
+#### Parameters
+
+<ParamField path="*funcs" type="function" required>
+  Arbitrary number of functions to compose. Functions are applied left to right (the leftmost function is called first).
+</ParamField>
+
+#### Returns
+
+<ResponseField name="composed_function" type="function">
+  A new function that represents the composition of all input functions. When called, it applies each function in sequence from left to right.
+</ResponseField>
+
+#### Raises
+
+<ResponseField name="ValueError" type="exception">
+  Raised when attempting to compose an empty sequence of functions.
+</ResponseField>
+
+#### Description
+
+This function implements mathematical function composition, allowing you to chain multiple functions together. Unlike traditional mathematical notation (which applies right to left), this implementation evaluates functions **left to right** for better readability in code.
+
+The composed function passes the result of each function as input to the next function in the sequence.
+
+**Mathematical notation:** If you have functions `f`, `g`, and `h`, then `compose(f, g, h)(x)` computes `h(g(f(x)))`.
+
+#### Example Usage
+
+##### Basic Composition
+
+```python
+from yad2k.utils.utils import compose
+
+# Define simple functions
+def add_one(x):
+    return x + 1
+
+def multiply_by_two(x):
+    return x * 2
+
+def square(x):
+    return x ** 2
+
+# Compose functions
+f = compose(add_one, multiply_by_two, square)
+
+# Apply composition: square(multiply_by_two(add_one(5)))
+result = f(5)
+print(result)  # ((5 + 1) * 2) ** 2 = (12) ** 2 = 144
+```
+
+##### String Processing
+
+```python
+from yad2k.utils.utils import compose
+
+# Compose string operations
+process = compose(
+    str.strip,
+    str.lower,
+    lambda s: s.replace(' ', '_')
+)
+
+result = process('  Hello World  ')
+print(result)  # 'hello_world'
+```
+
+##### Data Transformation Pipeline
+
+```python
+from yad2k.utils.utils import compose
+import numpy as np
+
+# Create a data preprocessing pipeline
+preprocess = compose(
+    lambda x: np.array(x),           # Convert to numpy array
+    lambda x: x / 255.0,             # Normalize to [0, 1]
+    lambda x: x.reshape(-1, 28, 28)  # Reshape
+)
+
+data = list(range(784))
+processed = preprocess(data)
+print(processed.shape)  # (1, 28, 28)
+```
+
+##### With Multiple Arguments
+
+```python
+from yad2k.utils.utils import compose
+
+# Functions can accept multiple arguments and keyword arguments
+def add(a, b):
+    return a + b
+
+def multiply(x, factor=2):
+    return x * factor
+
+def format_result(value):
+    return f"Result: {value}"
+
+f = compose(add, multiply, format_result)
+
+# First function receives all arguments
+result = f(3, 5, factor=3)
+print(result)  # 'Result: 24' -> (3 + 5) * 3 = 24
+```
+
+##### Error Handling
+
+```python
+from yad2k.utils.utils import compose
+
+try:
+    # Empty composition raises ValueError
+    f = compose()
+except ValueError as e:
+    print(e)  # 'Composition of empty sequence not supported.'
+```
+
+## Use Cases
+
+### Keras Layer Composition
+
+The `compose` function is particularly useful in YAD2K for building Keras model layers:
+
+```python
+from functools import partial
+from keras.layers import Conv2D, BatchNormalization, LeakyReLU
+from yad2k.utils.utils import compose
+
+# Define a DarknetConv2D block
+DarknetConv2D = partial(Conv2D, padding='same', use_bias=False)
+
+# Compose layers into a single callable
+DarknetConv2D_BN_Leaky = compose(
+    DarknetConv2D,
+    BatchNormalization,
+    partial(LeakyReLU, alpha=0.1)
+)
+
+# Use in model definition
+x = DarknetConv2D_BN_Leaky(32, (3, 3))(input_tensor)
+```
+
+### Functional Programming Style
+
+The `compose` function enables a functional programming approach, reducing the need for intermediate variables:
+
+```python
+# Without compose (imperative style)
+def process_image(image):
+    img = load_image(image)
+    img = resize_image(img)
+    img = normalize_image(img)
+    return img
+
+# With compose (functional style)
+process_image = compose(
+    load_image,
+    resize_image,
+    normalize_image
+)
+```
+
+## Implementation Notes
+
+- The implementation uses `functools.reduce()` to chain functions together
+- The composed function preserves both positional and keyword arguments through `*a, **kw`
+- Colors are cached in a function attribute for efficiency
+- Reference: [Function Composition in Python](https://mathieularose.com/function-composition-in-python/)

@@ -1,0 +1,246 @@
+---
+title: 'yolo-pi.py'
+description: 'Main script for real-time object detection on Raspberry Pi with MQTT integration'
+---
+
+## Overview
+
+The `yolo-pi.py` script is the main application that performs real-time object detection using a YOLO model on video input from a camera. It processes frames, identifies objects, and publishes detection results via MQTT.
+
+## Configuration Variables
+
+### Model Configuration
+
+<ParamField path="model_path" type="string" default="model_data/tiny-yolo-voc.h5">
+  Path to the trained YOLO model file in HDF5 format.
+</ParamField>
+
+<ParamField path="anchors_path" type="string" default="model_data/tiny-yolo-voc_anchors.txt">
+  Path to the anchor boxes configuration file. Contains comma-separated anchor box dimensions.
+</ParamField>
+
+<ParamField path="classes_path" type="string" default="model_data/pascal_classes.txt">
+  Path to the classes file. Each line contains one class name.
+</ParamField>
+
+### MQTT Configuration
+
+<ParamField path="mqtt_server" type="string" required>
+  MQTT broker server address. Must be set via the `MQTT` environment variable.
+</ParamField>
+
+```python
+mqtt_server = os.environ['MQTT']
+client = mqtt.Client("yolo-pi")
+client.connect(mqtt_server, 1883)
+```
+
+## Main Function
+
+### recognize_image()
+
+Performs object detection on a single frame and returns the annotated image.
+
+```python
+recognize_image(image, sess, boxes, scores, classes, is_fixed_size)
+```
+
+#### Parameters
+
+<ParamField path="image" type="numpy.ndarray" required>
+  Input image frame in BGR format (OpenCV format).
+</ParamField>
+
+<ParamField path="sess" type="tensorflow.Session" required>
+  Active TensorFlow session for running the model.
+</ParamField>
+
+<ParamField path="boxes" type="tensor" required>
+  Tensor output for bounding box coordinates from `yolo_eval()`.
+</ParamField>
+
+<ParamField path="scores" type="tensor" required>
+  Tensor output for confidence scores from `yolo_eval()`.
+</ParamField>
+
+<ParamField path="classes" type="tensor" required>
+  Tensor output for predicted class indices from `yolo_eval()`.
+</ParamField>
+
+<ParamField path="is_fixed_size" type="bool" required>
+  Whether the model expects fixed-size input. If `True`, images are resized to `model_image_size`. If `False`, images are resized to the nearest multiple of 32.
+</ParamField>
+
+#### Returns
+
+<ResponseField name="image" type="PIL.Image">
+  Annotated PIL Image with bounding boxes, labels, and confidence scores drawn on detected objects.
+</ResponseField>
+
+#### Image Processing Steps
+
+1. **Color Conversion**: Converts BGR (OpenCV) to RGB (PIL)
+2. **Resizing**: 
+   - Fixed size: Resizes to `model_image_size` using bicubic interpolation
+   - Dynamic size: Resizes to nearest multiple of 32
+3. **Normalization**: Divides pixel values by 255.0
+4. **Batch Dimension**: Expands dimensions to create batch of 1
+
+#### Detection Output
+
+The function processes detected objects and:
+
+- Draws bounding boxes with class-specific colors
+- Adds labels with class name and confidence score
+- Publishes JSON data to MQTT topic `'yolo'`
+
+#### MQTT Payload Format
+
+```json
+[
+  {
+    "item": "person",
+    "score": "0.95"
+  },
+  {
+    "item": "car",
+    "score": "0.87"
+  }
+]
+```
+
+## Initialization Sequence
+
+### 1. MQTT Client Setup
+
+```python
+client = mqtt.Client("yolo-pi")
+client.connect(mqtt_server, 1883)
+```
+
+Connects to the MQTT broker on port 1883 with client ID `"yolo-pi"`.
+
+### 2. Load Model and Configuration
+
+```python
+# Load class names
+with open(classes_path) as f:
+    class_names = f.readlines()
+class_names = [c.strip() for c in class_names]
+
+# Load anchors
+with open(anchors_path) as f:
+    anchors = f.readline()
+    anchors = [float(x) for x in anchors.split(',')]
+    anchors = np.array(anchors).reshape(-1, 2)
+
+# Load model
+yolo_model = load_model(model_path)
+```
+
+### 3. Initialize YOLO Outputs
+
+```python
+yolo_outputs = yolo_head(yolo_model.output, anchors, len(class_names))
+input_image_shape = K.placeholder(shape=(2, ))
+boxes, scores, classes = yolo_eval(
+    yolo_outputs,
+    input_image_shape,
+    score_threshold=.3,
+    iou_threshold=.5)
+```
+
+<ParamField path="score_threshold" type="float" default="0.3">
+  Minimum confidence score for detections to be considered valid.
+</ParamField>
+
+<ParamField path="iou_threshold" type="float" default="0.5">
+  Intersection over Union threshold for non-maximum suppression.
+</ParamField>
+
+### 4. Generate Class Colors
+
+Generates consistent colors for each class using HSV color space:
+
+```python
+hsv_tuples = [(x / len(class_names), 1., 1.)
+              for x in range(len(class_names))]
+colors = list(map(lambda x: colorsys.hsv_to_rgb(*x), hsv_tuples))
+colors = list(
+    map(lambda x: (int(x[0] * 255), int(x[1] * 255), int(x[2] * 255)),
+        colors))
+random.shuffle(colors)
+```
+
+## Video Capture Loop
+
+```python
+vc = cv2.VideoCapture(0)
+rval, frame = vc.read()
+
+while True:
+    if frame is not None:
+        pil_image = recognize_image(frame, sess, boxes, scores, classes, is_fixed_size)
+        open_cv_image = np.array(pil_image)
+    
+    rval, frame = vc.read()
+    
+    i = cv2.waitKey(1)
+    if i & 0xFF == ord('q'):
+        sess.close()
+        break
+
+vc.release()
+cv2.destroyAllWindows()
+```
+
+### Key Points
+
+- Captures from camera device 0 (default camera)
+- Processes each frame through `recognize_image()`
+- Press 'q' to quit the application
+- Properly releases resources on exit
+
+## Usage Example
+
+```bash
+# Set MQTT server environment variable
+export MQTT="mqtt.example.com"
+
+# Run the script
+python src/yolo-pi.py
+```
+
+## Dependencies
+
+- **opencv-python**: Video capture and image processing
+- **keras**: Model loading and inference
+- **tensorflow**: Backend for Keras
+- **PIL**: Image manipulation and drawing
+- **numpy**: Array operations
+- **paho-mqtt**: MQTT client
+
+## Font Configuration
+
+The script uses a custom font for labels:
+
+```python
+font = ImageFont.truetype(
+    font='font/FiraMono-Medium.otf',
+    size=np.floor(3e-2 * image.size[1] + 0.5).astype('int32'))
+```
+
+Font size is dynamically calculated based on image height (3% of height).
+
+## Error Handling
+
+```python
+try:
+    client = mqtt.Client("yolo-pi")
+    client.connect(mqtt_server, 1883)
+except Exception as e:
+    print("Could not connect to mqtt stream", e)
+    sys.exit(1)
+```
+
+The script exits if MQTT connection fails, ensuring proper error handling.

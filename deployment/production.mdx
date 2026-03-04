@@ -1,0 +1,490 @@
+---
+title: 'Production Deployment'
+description: 'Best practices for deploying YOLO-Pi in production environments'
+---
+
+## Overview
+
+Deploying YOLO-Pi in a production environment requires careful consideration of reliability, monitoring, security, and performance. This guide covers essential practices for running YOLO-Pi at scale.
+
+## Architecture Considerations
+
+### System Components
+
+A production YOLO-Pi deployment typically consists of:
+
+1. **YOLO-Pi Container(s)**: Running object detection on camera feeds
+2. **MQTT Broker**: Message broker for publishing detection events
+3. **Backend Services**: Consuming and processing detection data
+4. **Monitoring Stack**: Tracking performance and health
+
+<Note>
+  YOLO-Pi publishes detection results to an MQTT topic called `yolo` with JSON payloads containing detected objects and confidence scores.
+</Note>
+
+## MQTT Broker Setup
+
+YOLO-Pi requires an MQTT broker to publish detection results. The application connects to the broker specified in the `MQTT` environment variable.
+
+### Installing Mosquitto
+
+<Steps>
+  <Step title="Install Mosquitto">
+    On Ubuntu/Debian:
+    
+    ```bash
+    sudo apt-get update
+    sudo apt-get install mosquitto mosquitto-clients
+    ```
+    
+    On Raspberry Pi:
+    
+    ```bash
+    sudo apt-get install mosquitto mosquitto-clients
+    ```
+  </Step>
+
+  <Step title="Configure Mosquitto">
+    Edit `/etc/mosquitto/mosquitto.conf`:
+    
+    ```conf
+    # Listen on all interfaces
+    listener 1883 0.0.0.0
+    
+    # Enable persistence
+    persistence true
+    persistence_location /var/lib/mosquitto/
+    
+    # Logging
+    log_dest file /var/log/mosquitto/mosquitto.log
+    log_type all
+    
+    # Allow anonymous (change for production)
+    allow_anonymous true
+    ```
+    
+    <Warning>
+      For production, disable anonymous access and configure authentication (see Security section below).
+    </Warning>
+  </Step>
+
+  <Step title="Start and enable Mosquitto">
+    ```bash
+    sudo systemctl start mosquitto
+    sudo systemctl enable mosquitto
+    ```
+  </Step>
+
+  <Step title="Test the broker">
+    Subscribe to the yolo topic:
+    
+    ```bash
+    mosquitto_sub -h localhost -t yolo
+    ```
+    
+    When YOLO-Pi detects objects, you'll see JSON messages like:
+    
+    ```json
+    [{"item": "person", "score": "0.87"}, {"item": "chair", "score": "0.65"}]
+    ```
+  </Step>
+</Steps>
+
+## Container Orchestration
+
+### Using Docker with Systemd
+
+For single-node deployments, use systemd to manage the YOLO-Pi container:
+
+<Steps>
+  <Step title="Create systemd service file">
+    Create `/etc/systemd/system/yolo-pi.service`:
+    
+    ```ini
+    [Unit]
+    Description=YOLO-Pi Object Detection Container
+    Requires=docker.service
+    After=docker.service mosquitto.service
+    
+    [Service]
+    Restart=always
+    RestartSec=10
+    ExecStartPre=-/usr/bin/docker rm -f yolo-pi
+    ExecStart=/usr/bin/docker run --rm \
+      --name yolo-pi \
+      --device=/dev/video0:/dev/video0 \
+      -e MQTT=192.168.1.100 \
+      ashya/yolo-pi
+    ExecStop=/usr/bin/docker stop yolo-pi
+    
+    [Install]
+    WantedBy=multi-user.target
+    ```
+    
+    <Accordion title="Service file breakdown">
+      - `Requires=docker.service`: Ensures Docker is running
+      - `After=mosquitto.service`: Starts after MQTT broker
+      - `Restart=always`: Auto-restart on failure
+      - `RestartSec=10`: Wait 10 seconds between restarts
+      - `ExecStartPre`: Remove old container if exists
+      - `--rm`: Clean up container on stop
+    </Accordion>
+  </Step>
+
+  <Step title="Enable and start the service">
+    ```bash
+    sudo systemctl daemon-reload
+    sudo systemctl enable yolo-pi
+    sudo systemctl start yolo-pi
+    ```
+  </Step>
+
+  <Step title="Check service status">
+    ```bash
+    sudo systemctl status yolo-pi
+    sudo journalctl -u yolo-pi -f
+    ```
+  </Step>
+</Steps>
+
+### Using Docker Compose
+
+For multi-container setups, use Docker Compose:
+
+```yaml docker-compose.yml
+version: '3.8'
+
+services:
+  mosquitto:
+    image: eclipse-mosquitto:2
+    ports:
+      - "1883:1883"
+      - "9001:9001"
+    volumes:
+      - ./mosquitto.conf:/mosquitto/config/mosquitto.conf
+      - mosquitto-data:/mosquitto/data
+      - mosquitto-logs:/mosquitto/log
+    restart: unless-stopped
+
+  yolo-pi:
+    image: ashya/yolo-pi
+    devices:
+      - /dev/video0:/dev/video0
+    environment:
+      - MQTT=mosquitto
+    depends_on:
+      - mosquitto
+    restart: unless-stopped
+
+volumes:
+  mosquitto-data:
+  mosquitto-logs:
+```
+
+Deploy with:
+
+```bash
+docker-compose up -d
+```
+
+## Monitoring and Logging
+
+### Container Logs
+
+View real-time logs:
+
+```bash
+docker logs -f yolo-pi
+```
+
+YOLO-Pi logs include:
+- MQTT connection status
+- Model loading confirmation
+- Detection results with timestamps
+- Error messages
+
+### Log Rotation
+
+Configure Docker log rotation in `/etc/docker/daemon.json`:
+
+```json
+{
+  "log-driver": "json-file",
+  "log-opts": {
+    "max-size": "10m",
+    "max-file": "3"
+  }
+}
+```
+
+Restart Docker:
+
+```bash
+sudo systemctl restart docker
+```
+
+### Health Monitoring
+
+Monitor MQTT messages to detect issues:
+
+```bash
+# Subscribe to all topics to see activity
+mosquitto_sub -h localhost -t '#' -v
+```
+
+If no messages appear for extended periods, the container may have crashed or the camera may be disconnected.
+
+### Resource Monitoring
+
+Monitor container resource usage:
+
+```bash
+docker stats yolo-pi
+```
+
+<Note>
+  On Raspberry Pi 3, expect:
+  - CPU: 80-100% (during processing)
+  - Memory: 400-600MB
+  - Processing rate: ~0.5 FPS (1 frame per 2 seconds)
+</Note>
+
+## Performance Optimization
+
+### Model Selection
+
+YOLO-Pi supports different YOLO models. Choose based on your requirements:
+
+| Model | Speed | Accuracy | Use Case |
+|-------|-------|----------|----------|
+| tiny-yolo-voc | Fast (~0.5 FPS on RPi3) | Lower | Production on Raspberry Pi |
+| yolo-voc | Slow | Medium | Testing on x86 |
+| yolo-coco | Very slow | High | Development only |
+
+Configure in `/app/yolo-pi.py`:
+
+```python
+model_path = 'model_data/tiny-yolo-voc.h5'
+anchors_path = 'model_data/tiny-yolo-voc_anchors.txt'
+classes_path = 'model_data/pascal_classes.txt'
+```
+
+### Detection Threshold
+
+Adjust score and IOU thresholds in `yolo-pi.py:154-158`:
+
+```python
+boxes, scores, classes = yolo_eval(
+    yolo_outputs,
+    input_image_shape,
+    score_threshold=.3,    # Increase to reduce false positives
+    iou_threshold=.5)      # Adjust overlap threshold
+```
+
+<Accordion title="Threshold tuning">
+  - **score_threshold**: Minimum confidence (0.0-1.0). Higher = fewer false positives, more missed detections
+  - **iou_threshold**: Intersection over Union for non-max suppression. Higher = more overlapping boxes allowed
+  
+  For production, try `score_threshold=0.5` to reduce noise.
+</Accordion>
+
+### Hardware Optimization
+
+**Raspberry Pi:**
+- Use active cooling (fan or heatsink)
+- Quality power supply (2.5A minimum)
+- Overclock (if stable): Edit `/boot/config.txt`
+- Use Camera Module instead of USB (lower latency)
+
+**x86 Systems:**
+- Enable GPU acceleration (requires CUDA-enabled TensorFlow)
+- Use AVX2-optimized builds
+- Increase worker threads
+
+## Security Considerations
+
+### MQTT Authentication
+
+Disable anonymous access and require authentication:
+
+<Steps>
+  <Step title="Create password file">
+    ```bash
+    sudo mosquitto_passwd -c /etc/mosquitto/passwd yolo-client
+    # Enter password when prompted
+    ```
+  </Step>
+
+  <Step title="Configure Mosquitto">
+    Edit `/etc/mosquitto/mosquitto.conf`:
+    
+    ```conf
+    allow_anonymous false
+    password_file /etc/mosquitto/passwd
+    ```
+  </Step>
+
+  <Step title="Update YOLO-Pi configuration">
+    Modify `yolo-pi.py` to include credentials:
+    
+    ```python
+    client = mqtt.Client("yolo-pi")
+    client.username_pw_set("yolo-client", "your-password")
+    client.connect(mqtt_server, 1883)
+    ```
+    
+    Rebuild the Docker image after making changes.
+  </Step>
+</Steps>
+
+### Network Security
+
+<Warning>
+  MQTT uses unencrypted communication by default. For production deployments with sensitive data, use TLS/SSL encryption.
+</Warning>
+
+**Best practices:**
+- Run MQTT broker on internal network only
+- Use firewall rules to restrict access
+- Enable TLS for MQTT (port 8883)
+- Use VPN for remote access
+- Never expose MQTT broker directly to the internet
+
+### Container Security
+
+```bash
+# Run with reduced privileges where possible
+docker run -d \
+  --device=/dev/video0:/dev/video0 \
+  --cap-drop=ALL \
+  --cap-add=SYS_ADMIN \
+  --security-opt=no-new-privileges:true \
+  --read-only \
+  --tmpfs /tmp \
+  -e MQTT=192.168.1.100 \
+  ashya/yolo-pi
+```
+
+<Note>
+  Some capabilities may be required for camera access. Test thoroughly when implementing security restrictions.
+</Note>
+
+## Backup and Recovery
+
+### Backup Configuration
+
+Backup critical files:
+
+```bash
+# System configuration
+tar -czf yolo-pi-config-$(date +%F).tar.gz \
+  /etc/systemd/system/yolo-pi.service \
+  /etc/mosquitto/mosquitto.conf \
+  /etc/mosquitto/passwd
+
+# Docker image
+docker save ashya/yolo-pi | gzip > yolo-pi-image-$(date +%F).tar.gz
+```
+
+### Disaster Recovery
+
+Restore from backup:
+
+```bash
+# Restore image
+docker load < yolo-pi-image-2026-03-04.tar.gz
+
+# Restore configuration
+tar -xzf yolo-pi-config-2026-03-04.tar.gz -C /
+
+# Reload systemd
+sudo systemctl daemon-reload
+sudo systemctl start yolo-pi
+```
+
+## Scaling Considerations
+
+### Multiple Cameras
+
+Run multiple containers for multiple cameras:
+
+```bash
+# Camera 1
+docker run -d --name yolo-pi-1 \
+  --device=/dev/video0:/dev/video0 \
+  -e MQTT=192.168.1.100 \
+  ashya/yolo-pi
+
+# Camera 2
+docker run -d --name yolo-pi-2 \
+  --device=/dev/video1:/dev/video0 \
+  -e MQTT=192.168.1.100 \
+  ashya/yolo-pi
+```
+
+<Note>
+  Each container maps its respective camera to `/dev/video0` internally. Modify the MQTT client ID in `yolo-pi.py` to distinguish between cameras.
+</Note>
+
+### Distributed Deployment
+
+For multiple Raspberry Pi devices:
+
+1. Centralize MQTT broker on a server
+2. Configure each Pi with the broker's IP
+3. Use unique client IDs (modify `yolo-pi.py:23`)
+4. Subscribe to `yolo/#` with wildcards to capture all devices
+
+## Troubleshooting Production Issues
+
+<AccordionGroup>
+  <Accordion title="Container keeps restarting">
+    Check logs for errors:
+    
+    ```bash
+    docker logs yolo-pi
+    journalctl -u yolo-pi -n 50
+    ```
+    
+    Common causes:
+    - MQTT broker unreachable
+    - Camera device not available
+    - Out of memory (check with `docker stats`)
+  </Accordion>
+
+  <Accordion title="No MQTT messages received">
+    Verify:
+    1. Container is running: `docker ps`
+    2. MQTT broker is accessible: `mosquitto_sub -h <broker-ip> -t yolo`
+    3. Camera is working: Check container logs
+    4. No firewall blocking port 1883
+  </Accordion>
+
+  <Accordion title="High CPU usage">
+    This is normal for YOLO-Pi. To reduce:
+    - Lower camera resolution
+    - Reduce frame rate (modify `yolo-pi.py`)
+    - Use a more powerful device
+    - Consider hardware acceleration
+  </Accordion>
+
+  <Accordion title="Detection accuracy is poor">
+    Improve accuracy:
+    - Ensure adequate lighting
+    - Clean camera lens
+    - Increase `score_threshold` to 0.5+
+    - Use full YOLO model instead of tiny-yolo (on x86)
+    - Train custom model on your specific use case
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Running Inference" icon="code" href="/guides/running-inference">
+    Learn how to run and configure inference
+  </Card>
+  <Card title="API Reference" icon="book" href="/api/yolo-pi">
+    Explore the YOLO-Pi API
+  </Card>
+</CardGroup>

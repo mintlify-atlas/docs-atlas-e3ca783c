@@ -1,0 +1,148 @@
+---
+title: Introduction
+description: Real-time object detection on Raspberry Pi using YOLO, Keras, and OpenCV
+---
+
+# YOLO-Pi: Real-Time Object Recognition on Raspberry Pi
+
+YOLO-Pi brings powerful real-time object detection capabilities to the Raspberry Pi platform by combining YOLO (You Only Look Once) neural networks with efficient edge computing.
+
+## What is YOLO-Pi?
+
+YOLO-Pi is a computer vision project that enables automatic object detection through a USB camera attached to a Raspberry Pi. The system processes live video feeds in real-time and identifies objects using pre-trained YOLO models converted to Keras format.
+
+The project captures video from a camera, processes each frame through a YOLO neural network, and publishes detection results via MQTT for downstream applications like home automation, security monitoring, or IoT analytics.
+
+## Technology Stack
+
+YOLO-Pi leverages a carefully selected set of technologies optimized for embedded machine learning:
+
+### Core Framework
+- **YOLO (You Only Look Once)**: State-of-the-art object detection algorithm that processes images in a single pass
+- **Keras**: High-level neural network API for model inference
+- **TensorFlow**: Backend engine for neural network computation
+- **YAD2K**: Converter tool that transforms YOLO weights and configurations into Keras models
+
+### Computer Vision
+- **OpenCV 3**: Real-time computer vision library for camera capture and image processing
+- **Pillow**: Image manipulation for preprocessing and annotation
+- **NumPy**: Efficient array operations for image data
+
+### Communication
+- **MQTT (Paho)**: Lightweight messaging protocol for publishing detection events
+- **JSON**: Structured data format for detection results
+
+## Hardware Requirements
+
+YOLO-Pi is designed to run on resource-constrained hardware:
+
+<Info>
+**Minimum Hardware**
+- Raspberry Pi 3 or newer (Raspberry Pi 3+ recommended)
+- USB camera compatible with Video4Linux (v4l)
+- 2GB+ swap space for compilation
+- MicroSD card (16GB+ recommended)
+</Info>
+
+<Warning>
+Compiling dependencies on Raspberry Pi takes considerable time (20+ minutes for Docker builds). The project includes pre-built Docker images to simplify deployment.
+</Warning>
+
+## Supported Models
+
+YOLO-Pi supports multiple pre-trained YOLO models with different accuracy and speed tradeoffs:
+
+### Tiny YOLO VOC (Recommended)
+Optimized for speed on embedded devices, this model achieves approximately 1 frame every 2 seconds on a MacBook Pro, with lower frame rates on Raspberry Pi.
+
+```python
+model_path = 'model_data/tiny-yolo-voc.h5'
+anchors_path = 'model_data/tiny-yolo-voc_anchors.txt'
+classes_path = 'model_data/pascal_classes.txt'
+```
+
+### Full YOLO COCO
+Higher accuracy model trained on the COCO dataset with 80 object classes.
+
+```python
+model_path = 'model_data/yolo.h5'
+anchors_path = 'model_data/yolo_anchors.txt'
+classes_path = 'model_data/coco_classes.txt'
+```
+
+## Detection Classes
+
+### Pascal VOC (20 classes)
+The tiny-yolo-voc model detects 20 common object categories:
+
+- Vehicles: aeroplane, bicycle, boat, bus, car, motorbike, train
+- Animals: bird, cat, cow, dog, horse, sheep
+- Furniture: chair, diningtable, sofa, tvmonitor
+- Objects: bottle, person, pottedplant
+
+### COCO Dataset (80 classes)
+The full YOLO model supports a broader range of objects including sports equipment, food items, electronics, and more.
+
+## Key Features
+
+- **Real-time Detection**: Continuous video processing with live object identification
+- **MQTT Integration**: Publishes detection events with object class and confidence scores
+- **Bounding Box Visualization**: Annotates detected objects with colored boxes and labels
+- **Flexible Model Selection**: Easy switching between accuracy and speed tradeoffs
+- **Docker Support**: Containerized deployment for both x86 and ARM architectures
+- **Headless Operation**: Runs without display for server deployments
+
+## Detection Output
+
+YOLO-Pi generates structured JSON data for each detection:
+
+```json
+[
+  {"item": "person", "score": "0.87"},
+  {"item": "chair", "score": "0.62"}
+]
+```
+
+This data is published to the `yolo` MQTT topic with timestamps for event correlation.
+
+## Architecture Overview
+
+The system architecture follows this pipeline:
+
+<Steps>
+  <Step title="Video Capture">
+    OpenCV captures frames from the USB camera at `/dev/video0`
+  </Step>
+  
+  <Step title="Preprocessing">
+    Images are converted from BGR to RGB, resized to model input dimensions, and normalized
+  </Step>
+  
+  <Step title="Inference">
+    The Keras model processes the image through the YOLO network to detect objects
+  </Step>
+  
+  <Step title="Post-processing">
+    Bounding boxes are filtered by confidence threshold (0.3) and non-maximum suppression (IOU 0.5)
+  </Step>
+  
+  <Step title="Output">
+    Detection results are published via MQTT and optionally visualized with bounding boxes
+  </Step>
+</Steps>
+
+## Use Cases
+
+- **Home Security**: Detect and alert on specific objects or people in camera view
+- **Wildlife Monitoring**: Identify animals in outdoor camera feeds
+- **Inventory Management**: Track objects entering/leaving a space
+- **Smart Home Automation**: Trigger actions based on detected objects
+- **Educational Projects**: Learn computer vision and edge AI deployment
+
+<Note>
+YOLO-Pi prioritizes inference speed over training. The project uses pre-trained weights from the official YOLO project and focuses on efficient deployment rather than model training.
+</Note>
+
+## Next Steps
+
+Ready to get started? Check out the [Quickstart Guide](/quickstart) to set up YOLO-Pi and run your first object detection.

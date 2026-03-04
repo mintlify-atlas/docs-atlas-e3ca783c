@@ -1,0 +1,385 @@
+---
+title: 'Running Inference'
+description: 'Run object detection inference on video streams using YOLO-Pi'
+---
+
+## Overview
+
+YOLO-Pi provides real-time object detection on video streams from USB cameras. This guide explains how to configure the model paths, run inference, and understand the recognition pipeline.
+
+## Recognition Pipeline
+
+The YOLO-Pi inference pipeline consists of several stages:
+
+<Steps>
+  <Step title="Video Capture">
+    Capture frames from USB camera using OpenCV:
+    
+    ```python
+    vc = cv2.VideoCapture(0)
+    rval, frame = vc.read()
+    ```
+    
+    *Source: `src/yolo-pi.py:162-163`*
+  </Step>
+  
+  <Step title="Image Preprocessing">
+    Convert and resize the image for model input:
+    
+    ```python
+    cv2_im = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+    image = Image.fromarray(cv2_im)
+    image_data = np.array(resized_image, dtype='float32')
+    image_data /= 255.  # Normalize to [0, 1]
+    image_data = np.expand_dims(image_data, 0)  # Add batch dimension
+    ```
+    
+    *Source: `src/yolo-pi.py:34-49`*
+  </Step>
+  
+  <Step title="Model Inference">
+    Run the YOLO model to detect objects:
+    
+    ```python
+    out_boxes, out_scores, out_classes = sess.run(
+        [boxes, scores, classes],
+        feed_dict={
+            yolo_model.input: image_data,
+            input_image_shape: [image.size[1], image.size[0]],
+            K.learning_phase(): 0
+        })
+    ```
+    
+    *Source: `src/yolo-pi.py:50-56`*
+  </Step>
+  
+  <Step title="Post-processing">
+    Filter detections, draw bounding boxes, and publish results via MQTT.
+  </Step>
+</Steps>
+
+## Configuring Model Paths
+
+The `yolo-pi.py` script uses hardcoded paths for model configuration. Edit these lines to switch between models:
+
+### Tiny YOLO VOC (Default)
+
+```python
+model_path = 'model_data/tiny-yolo-voc.h5'
+anchors_path = 'model_data/tiny-yolo-voc_anchors.txt'
+classes_path = 'model_data/pascal_classes.txt'
+```
+
+*Source: `src/yolo-pi.py:108-110`*
+
+### Full YOLO with COCO
+
+For the full YOLO model, uncomment these lines:
+
+```python
+model_path = 'model_data/yolo.h5'
+anchors_path = 'model_data/yolo_anchors.txt'
+classes_path = 'model_data/coco_classes.txt'
+```
+
+*Source: `src/yolo-pi.py:111-113`*
+
+<Warning>
+  Ensure all three files (model, anchors, classes) match the same YOLO configuration. Mismatched files will cause assertion errors.
+</Warning>
+
+## The `recognize_image()` Function
+
+The core detection logic is implemented in the `recognize_image()` function:
+
+```python
+def recognize_image(image, sess, boxes, scores, classes, is_fixed_size):
+    # Convert BGR to RGB
+    cv2_im = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+    image = Image.fromarray(cv2_im)
+    
+    # Resize image based on model requirements
+    if is_fixed_size: 
+        resized_image = image.resize(
+            tuple(reversed(model_image_size)), Image.BICUBIC)
+        image_data = np.array(resized_image, dtype='float32')
+    else:
+        new_image_size = (image.width - (image.width % 32),
+                      image.height - (image.height % 32))
+        resized_image = image.resize(new_image_size, Image.BICUBIC)
+        image_data = np.array(resized_image, dtype='float32')
+
+    # Normalize pixel values
+    image_data /= 255.
+    image_data = np.expand_dims(image_data, 0)
+    
+    # Run inference
+    out_boxes, out_scores, out_classes = sess.run(
+        [boxes, scores, classes],
+        feed_dict={
+            yolo_model.input: image_data,
+            input_image_shape: [image.size[1], image.size[0]],
+            K.learning_phase(): 0
+        })
+    
+    # Process detections...
+    return image
+```
+
+*Source: `src/yolo-pi.py:33-103`*
+
+### Function Parameters
+
+- **`image`**: OpenCV frame from video capture (BGR format)
+- **`sess`**: Keras backend session
+- **`boxes`**: Tensor for bounding box coordinates
+- **`scores`**: Tensor for confidence scores
+- **`classes`**: Tensor for class predictions
+- **`is_fixed_size`**: Boolean indicating if the model requires fixed-size input
+
+## Model Initialization
+
+Before running inference, the model and associated data must be loaded:
+
+```python
+# Load class names
+with open(classes_path) as f:
+    class_names = f.readlines()
+class_names = [c.strip() for c in class_names]
+
+# Load anchors
+with open(anchors_path) as f:
+    anchors = f.readline()
+    anchors = [float(x) for x in anchors.split(',')]
+    anchors = np.array(anchors).reshape(-1, 2)
+
+# Load Keras model
+yolo_model = load_model(model_path)
+num_classes = len(class_names)
+num_anchors = len(anchors)
+```
+
+*Source: `src/yolo-pi.py:114-125`*
+
+### Model Validation
+
+The script validates that the model architecture matches the anchor and class configurations:
+
+```python
+model_output_channels = yolo_model.layers[-1].output_shape[-1]
+assert model_output_channels == num_anchors * (num_classes + 5), \
+    'Mismatch between model and given anchor and class sizes. ' \
+    'Specify matching anchors and classes with --anchors_path and ' \
+    '--classes_path flags.'
+```
+
+*Source: `src/yolo-pi.py:127-131`*
+
+<Note>
+  Each anchor predicts `(num_classes + 5)` values: 4 for bounding box coordinates, 1 for confidence, and `num_classes` for class probabilities.
+</Note>
+
+## Drawing Bounding Boxes
+
+Detected objects are visualized with labeled bounding boxes:
+
+```python
+for i, c in reversed(list(enumerate(out_classes))):
+    predicted_class = class_names[c]
+    box = out_boxes[i]
+    score = out_scores[i]
+
+    label = '{} {:.2f}'.format(predicted_class, score)
+    draw = ImageDraw.Draw(image)
+    
+    # Get box coordinates
+    top, left, bottom, right = box
+    top = max(0, np.floor(top + 0.5).astype('int32'))
+    left = max(0, np.floor(left + 0.5).astype('int32'))
+    bottom = min(image.size[1], np.floor(bottom + 0.5).astype('int32'))
+    right = min(image.size[0], np.floor(right + 0.5).astype('int32'))
+    
+    # Draw rectangle with class-specific color
+    for i in range(thickness):
+        draw.rectangle(
+            [left + i, top + i, right - i, bottom - i],
+            outline=colors[c])
+    
+    # Draw label background and text
+    draw.rectangle(
+        [tuple(text_origin), tuple(text_origin + label_size)],
+        fill=colors[c])
+    draw.text(text_origin, label, fill=(0, 0, 0), font=font)
+```
+
+*Source: `src/yolo-pi.py:66-96`*
+
+### Color Generation
+
+Each class is assigned a unique color using HSV color space:
+
+```python
+hsv_tuples = [(x / len(class_names), 1., 1.)
+              for x in range(len(class_names))]
+colors = list(map(lambda x: colorsys.hsv_to_rgb(*x), hsv_tuples))
+colors = list(
+    map(lambda x: (int(x[0] * 255), int(x[1] * 255), int(x[2] * 255)),
+        colors))
+random.seed(10101)  # Fixed seed for consistent colors across runs
+random.shuffle(colors)
+```
+
+*Source: `src/yolo-pi.py:139-147`*
+
+## Performance Tuning
+
+### Score Threshold
+
+Control detection sensitivity by adjusting the confidence threshold:
+
+```python
+boxes, scores, classes = yolo_eval(
+    yolo_outputs,
+    input_image_shape,
+    score_threshold=.3,  # Only keep detections with confidence > 0.3
+    iou_threshold=.5)    # NMS threshold for overlapping boxes
+```
+
+*Source: `src/yolo-pi.py:154-158`*
+
+**Tuning Guidelines:**
+- **Lower threshold (0.1-0.3)**: More detections, higher false positive rate
+- **Medium threshold (0.3-0.5)**: Balanced precision and recall (default: 0.3)
+- **Higher threshold (0.5-0.9)**: Fewer detections, higher precision
+
+### IOU Threshold
+
+The Intersection over Union (IOU) threshold controls Non-Maximum Suppression (NMS):
+
+```python
+iou_threshold=.5  # Suppress boxes with IOU > 0.5
+```
+
+- **Lower IOU**: More aggressive suppression, fewer overlapping boxes
+- **Higher IOU**: Less suppression, may keep multiple boxes for same object
+
+<Note>
+  The `yolo_eval()` function is defined in `src/yad2k/models/keras_yolo.py:323-349` and handles box filtering and non-maximum suppression.
+</Note>
+
+## Running the Application
+
+### Starting Inference
+
+Run the YOLO-Pi script to start real-time detection:
+
+```bash
+cd src
+python yolo-pi.py
+```
+
+### Main Detection Loop
+
+```python
+while True:
+    if frame is not None:
+        pil_image = recognize_image(frame, sess, boxes, scores, classes, is_fixed_size)
+        open_cv_image = np.array(pil_image)
+        # Optionally display: cv2.imshow("preview", open_cv_image)
+
+    rval, frame = vc.read()
+    
+    i = cv2.waitKey(1)
+    if i & 0xFF == ord('q'):  # Press 'q' to quit
+        sess.close()
+        break
+
+vc.release()
+cv2.destroyAllWindows()
+```
+
+*Source: `src/yolo-pi.py:168-184`*
+
+<Note>
+  The display window (`cv2.imshow`) is commented out by default. Uncomment line 174 to visualize detections locally.
+</Note>
+
+## Environment Variables
+
+YOLO-Pi requires the MQTT server environment variable:
+
+```bash
+export MQTT=mqtt.example.com
+python yolo-pi.py
+```
+
+See the [MQTT Integration](/guides/mqtt-integration) guide for details.
+
+## Expected Performance
+
+<CardGroup cols={2}>
+  <Card title="Raspberry Pi 3" icon="raspberry-pi">
+    **Tiny YOLO VOC**
+    - ~0.5-1 FPS
+    - Requires swap space for compilation
+    - Best with USB camera at 640x480
+  </Card>
+  
+  <Card title="MacBook Pro" icon="laptop">
+    **Tiny YOLO VOC**
+    - ~0.5 FPS (1 frame per 2 seconds)
+    - Suitable for development and testing
+    - Can handle higher resolutions
+  </Card>
+</CardGroup>
+
+<Warning>
+  The full YOLO model is significantly slower than Tiny YOLO. For real-time applications on Raspberry Pi, use Tiny YOLO VOC.
+</Warning>
+
+## Troubleshooting
+
+### Camera Not Found
+
+If the video capture fails:
+
+```python
+if rval == False:
+    print("Can't read video capture. Exiting.")
+    sys.exit(1)
+```
+
+**Solutions:**
+- Verify camera is connected: `ls /dev/video*`
+- Try different camera index: `cv2.VideoCapture(1)`
+- Check camera permissions
+
+### Model Loading Errors
+
+Ensure all three files match:
+
+```bash
+# Check files exist
+ls model_data/tiny-yolo-voc.h5
+ls model_data/tiny-yolo-voc_anchors.txt
+ls model_data/pascal_classes.txt
+```
+
+### Memory Issues
+
+For Raspberry Pi deployments:
+- Use Tiny YOLO instead of full YOLO
+- Set up swap space (see setup guide)
+- Consider reducing input image resolution
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Model Conversion" icon="arrows-rotate" href="/guides/model-conversion">
+    Learn how to convert different YOLO models
+  </Card>
+  
+  <Card title="MQTT Integration" icon="network-wired" href="/guides/mqtt-integration">
+    Set up MQTT messaging for detection events
+  </Card>
+</CardGroup>

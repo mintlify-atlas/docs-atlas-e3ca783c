@@ -1,0 +1,189 @@
+---
+title: Installation
+description: Install YOLO-Pi dependencies and get started with real-time object detection
+---
+
+## Overview
+
+YOLO-Pi requires several Python packages and system libraries to run. The installation process involves setting up Python 3, OpenCV 3, and deep learning frameworks (Keras and TensorFlow).
+
+<Warning>
+Python environment setup can be challenging. We recommend using Anaconda for managing dependencies and isolating your Python environment.
+</Warning>
+
+## Prerequisites
+
+<Steps>
+  <Step title="Python 3 Installation">
+    YOLO-Pi requires Python 3. We recommend using Anaconda for better package management:
+    
+    ```bash
+    # Download and install Anaconda
+    wget https://repo.anaconda.com/archive/Anaconda3-latest-Linux-x86_64.sh
+    bash Anaconda3-latest-Linux-x86_64.sh
+    ```
+    
+    After installation, create a new environment:
+    
+    ```bash
+    conda create -n yolopi python=3.6
+    conda activate yolopi
+    ```
+  </Step>
+
+  <Step title="OpenCV 3 Installation">
+    OpenCV 3.0.0 is required for video capture and image processing. Version 3.1 has known bugs on macOS that cause crashes.
+    
+    **Using Conda (Recommended for macOS):**
+    
+    ```bash
+    conda install -c jlaura opencv3
+    ```
+    
+    <Note>
+    This installs OpenCV 3.0.0, which is more stable than 3.1.1 on macOS systems.
+    </Note>
+    
+    **Building from Source:**
+    
+    If you need to build OpenCV 3.3.0 from source (required for Raspberry Pi), see the [Docker setup](/setup/docker) instructions for the complete build configuration.
+  </Step>
+
+  <Step title="Deep Learning Libraries">
+    Install Keras, TensorFlow, and supporting libraries:
+    
+    **Using pip:**
+    
+    ```bash
+    pip install numpy
+    pip install keras==2.1.2
+    pip install tensorflow==1.1.0
+    pip install pillow==4.3.0
+    pip install h5py==2.7.1
+    ```
+    
+    **For conda users:**
+    
+    ```bash
+    pip install keras==2.1.2
+    pip install tensorflow==1.1.0
+    pip install pillow==4.3.0
+    pip install h5py==2.7.1
+    ```
+    
+    <Note>
+    NumPy is typically pre-installed with Anaconda, but can be installed separately if needed.
+    </Note>
+  </Step>
+
+  <Step title="Optional: MQTT Support">
+    If you plan to use MQTT for publishing detection results:
+    
+    ```bash
+    pip install paho-mqtt
+    ```
+    
+    The YOLO-Pi script uses the `MQTT` environment variable to connect to your MQTT server:
+    
+    ```bash
+    export MQTT=your-mqtt-server-address
+    ```
+  </Step>
+</Steps>
+
+## Required Dependencies Summary
+
+| Package | Version | Notes |
+|---------|---------|-------|
+| Python | 3.x | We use Python 3.6 |
+| OpenCV | 3.0.0 | Version 3.1 crashes on macOS |
+| Keras | 2.1.2 | Deep learning framework |
+| TensorFlow | 1.1.0 | Backend for Keras |
+| Pillow | 4.3.0 | Image processing |
+| NumPy | Latest | Numerical computing |
+| h5py | 2.7.1 | Model file format support |
+| paho-mqtt | Latest | Optional: MQTT publishing |
+
+## Setting Up YOLO Models
+
+After installing dependencies, you'll need to prepare the YOLO model files:
+
+<Steps>
+  <Step title="Download YOLO Weights and Config">
+    Download the Tiny YOLO VOC weights and configuration from the [official YOLO website](https://pjreddie.com/darknet/yolo/):
+    
+    ```bash
+    wget https://pjreddie.com/media/files/tiny-yolo-voc.weights
+    wget https://raw.githubusercontent.com/pjreddie/darknet/master/cfg/tiny-yolo-voc.cfg
+    ```
+  </Step>
+
+  <Step title="Convert to Keras Format">
+    Use the YAD2K tool to convert YOLO weights to Keras format:
+    
+    ```bash
+    ./yad2k.py tiny-yolo-voc.cfg tiny-yolo-voc.weights model_data/tiny-yolo-voc.h5
+    ```
+    
+    This creates the `tiny-yolo-voc.h5` file needed by YOLO-Pi.
+  </Step>
+
+  <Step title="Configure Model Paths">
+    Update the model paths in `yolo-pi.py`:
+    
+    ```python
+    model_path = 'model_data/tiny-yolo-voc.h5'
+    anchors_path = 'model_data/tiny-yolo-voc_anchors.txt'
+    classes_path = 'model_data/pascal_classes.txt'
+    ```
+  </Step>
+</Steps>
+
+## Verification
+
+Test your installation by running the YOLO-Pi script:
+
+```bash
+python3 yolo-pi.py
+```
+
+<Note>
+On a MacBook Pro, expect approximately 1 frame every 2 seconds. Performance varies based on hardware.
+</Note>
+
+## Troubleshooting
+
+<Accordion title="ImportError: No module named cv2">
+  OpenCV is not properly installed. Reinstall using conda:
+  
+  ```bash
+  conda install -c jlaura opencv3
+  ```
+</Accordion>
+
+<Accordion title="OpenCV crashes on macOS">
+  You may be using OpenCV 3.1, which has known issues. Downgrade to 3.0.0:
+  
+  ```bash
+  conda install -c jlaura opencv3=3.0.0
+  ```
+</Accordion>
+
+<Accordion title="Keras/TensorFlow version conflicts">
+  Ensure you're using the exact versions specified:
+  
+  ```bash
+  pip install keras==2.1.2 tensorflow==1.1.0 h5py==2.7.1
+  ```
+</Accordion>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Raspberry Pi Setup" icon="raspberry-pi" href="/setup/raspberry-pi">
+    Configure YOLO-Pi on Raspberry Pi 3 with camera support
+  </Card>
+  <Card title="Docker Setup" icon="docker" href="/setup/docker">
+    Run YOLO-Pi in a Docker container for easier deployment
+  </Card>
+</CardGroup>

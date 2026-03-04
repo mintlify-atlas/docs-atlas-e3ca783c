@@ -1,0 +1,418 @@
+---
+title: Docker Setup
+description: Run YOLO-Pi in Docker containers on x86 and ARM platforms with USB camera support
+---
+
+## Overview
+
+Docker provides the easiest way to run YOLO-Pi by packaging all dependencies, including OpenCV, TensorFlow, and Keras, into a single container image. YOLO-Pi includes separate Dockerfiles for x86 (laptops/desktops) and ARM (Raspberry Pi) platforms.
+
+## Architecture Support
+
+| Platform | Dockerfile | Base Image | Build Time |
+|----------|-----------|------------|------------|
+| x86/x64 | `Dockerfile.x86` | `python:3.6` | ~20 minutes |
+| ARM (RPi) | `Dockerfile.rpi` | `resin/rpi-raspbian:stretch` | Several hours |
+
+## Prerequisites
+
+<Steps>
+  <Step title="Install Docker">
+    **On Linux/macOS:**
+    
+    ```bash
+    curl -fsSL https://get.docker.com -o get-docker.sh
+    sudo sh get-docker.sh
+    ```
+    
+    **On Raspberry Pi:**
+    
+    ```bash
+    curl -fsSL https://get.docker.com -o get-docker.sh
+    sudo sh get-docker.sh
+    sudo usermod -aG docker $USER
+    ```
+    
+    Log out and back in for group changes to take effect.
+  </Step>
+
+  <Step title="Verify Camera Device">
+    Ensure your USB camera is detected:
+    
+    ```bash
+    ls -l /dev/video0
+    ```
+    
+    If not found, check connected cameras:
+    
+    ```bash
+    v4l2-ctl --list-devices
+    ```
+  </Step>
+</Steps>
+
+## Building for x86/x64
+
+The x86 Dockerfile is optimized for development and testing on laptops and desktops.
+
+<Steps>
+  <Step title="Review Dockerfile.x86">
+    The x86 Dockerfile includes:
+    
+    - Python 3.6 base image
+    - System dependencies (build tools, libraries)
+    - Python packages: NumPy, Keras 2.1.2, TensorFlow 1.1.0, Pillow 4.3.0, h5py 2.7.1
+    - OpenCV 3.3.0 compiled from source with optimizations (AVX, OpenGL, OpenCL, TBB, Eigen)
+    - Kafka-python for messaging (alternative to MQTT)
+  </Step>
+
+  <Step title="Build Image">
+    ```bash
+    docker build -t ashya/yolo-pi --file Dockerfile.x86 .
+    ```
+    
+    <Note>
+    This takes approximately 20 minutes on modern hardware due to OpenCV compilation.
+    </Note>
+  </Step>
+
+  <Step title="Run Container">
+    Run with camera access and current directory mounted:
+    
+    ```bash
+    docker run -it --rm --privileged \
+      --device=/dev/video0:/dev/video0 \
+      -v $(pwd):/app \
+      ashya/yolopi /bin/bash
+    ```
+    
+    **Parameters explained:**
+    - `-it`: Interactive terminal
+    - `--rm`: Remove container after exit
+    - `--privileged`: Grant extended privileges (required for camera access)
+    - `--device=/dev/video0:/dev/video0`: Mount camera device
+    - `-v $(pwd):/app`: Mount current directory to `/app` in container
+  </Step>
+</Steps>
+
+## Building for ARM (Raspberry Pi)
+
+The ARM Dockerfile is specifically configured for Raspberry Pi hardware.
+
+<Steps>
+  <Step title="Prepare Build Environment">
+    On Raspberry Pi, set up a USB swap drive before building. See the [Raspberry Pi setup guide](/setup/raspberry-pi#usb-swap-setup) for detailed instructions.
+    
+    ```bash
+    # Quick swap setup
+    sudo dphys-swapfile setup
+    sudo dphys-swapfile swapon
+    ```
+  </Step>
+
+  <Step title="Download TensorFlow Wheel">
+    The ARM build requires a pre-compiled TensorFlow binary:
+    
+    ```bash
+    cd ~/src
+    wget https://github.com/samjabrahams/tensorflow-on-raspberry-pi/releases/download/v1.1.0/tensorflow-1.1.0-cp34-cp34m-linux_armv7l.whl
+    mv tensorflow-1.1.0-cp34-cp34m-linux_armv7l.whl tensorflow-1.1.0-cp35-cp35m-linux_armv7l.whl
+    ```
+    
+    Place `Dockerfile.rpi` in the same directory as the wheel file.
+  </Step>
+
+  <Step title="Build Image (Long Process)">
+    Use `screen` to maintain your session during the long build:
+    
+    ```bash
+    screen
+    docker build -t ashya/yolo-pi -f Dockerfile.rpi .
+    ```
+    
+    Press `Ctrl+A` then `D` to detach. Reattach later with `screen -r`.
+    
+    <Warning>
+    Building on Raspberry Pi 3 takes **several hours** due to compiling OpenCV from source. Be patient and ensure stable power.
+    </Warning>
+  </Step>
+
+  <Step title="Run Container">
+    Run with camera access:
+    
+    ```bash
+    docker run -it --rm --device /dev/video0 ashya/yolo-pi /bin/bash
+    ```
+    
+    Or run in detached mode:
+    
+    ```bash
+    docker run -d --device /dev/video0 ashya/yolo-pi
+    ```
+  </Step>
+</Steps>
+
+## Dockerfile Comparison
+
+<CodeGroup>
+
+```dockerfile Dockerfile.x86
+FROM python:3.6
+MAINTAINER Vallard Benincosa
+
+RUN apt-get update && \
+        apt-get install -y \
+        build-essential cmake git wget unzip yasm \
+        pkg-config libswscale-dev libtbb2 libtbb-dev \
+        libjpeg-dev libpng-dev libtiff-dev libavformat-dev \
+        libpq-dev libgtk2.0-dev pkg-config
+
+RUN pip install numpy \
+        keras==2.1.2 \
+        tensorflow==1.1.0 \
+        pillow==4.3.0 \
+        kafka-python \
+        h5py==2.7.1
+
+# Build OpenCV 3.3.0 with optimizations
+WORKDIR /
+RUN wget https://github.com/opencv/opencv/archive/3.3.0.zip \
+&& unzip 3.3.0.zip \
+&& mkdir /opencv-3.3.0/cmake_binary \
+&& cd /opencv-3.3.0/cmake_binary \
+&& cmake -DBUILD_TIFF=ON \
+  -DBUILD_opencv_java=OFF \
+  -DWITH_CUDA=OFF \
+  -DENABLE_AVX=ON \
+  -DWITH_OPENGL=ON \
+  -DWITH_OPENCL=ON \
+  -DWITH_IPP=ON \
+  -DWITH_TBB=ON \
+  -DWITH_EIGEN=ON \
+  -DWITH_V4L=ON \
+  -DBUILD_TESTS=OFF \
+  -DBUILD_PERF_TESTS=OFF \
+  -DCMAKE_BUILD_TYPE=RELEASE \
+  -DCMAKE_INSTALL_PREFIX=$(python3.6 -c "import sys; print(sys.prefix)") \
+  -DPYTHON_EXECUTABLE=$(which python3.6) \
+  -DPYTHON_INCLUDE_DIR=$(python3.6 -c "from distutils.sysconfig import get_python_inc; print(get_python_inc())") \
+  -DPYTHON_PACKAGES_PATH=$(python3.6 -c "from distutils.sysconfig import get_python_lib; print(get_python_lib())") .. \
+&& make install \
+&& rm /3.3.0.zip \
+&& rm -r /opencv-3.3.0
+
+ADD src/ /app
+WORKDIR /app
+CMD ["python3", "yolo-pi.py"]
+```
+
+```dockerfile Dockerfile.rpi
+FROM resin/rpi-raspbian:stretch
+MAINTAINER Vallard
+
+RUN apt-get update && \
+        apt-get install -y \
+        build-essential cmake git wget unzip yasm \
+        pkg-config libswscale-dev libtbb2 libtbb-dev \
+        libjpeg-dev libpng-dev libtiff-dev libjasper-dev \
+        libavformat-dev libpq-dev libgtk2.0-dev \
+        python3 python3-pip python3-setuptools python3-dev \
+        libblas-dev liblapack-dev libhdf5-dev \
+        python3-h5py python3-scipy python3-pil
+
+RUN pip3 install numpy \
+        keras==2.1.2 \
+        paho-mqtt \
+        h5py==2.7.1
+
+# Install pre-compiled TensorFlow for ARM
+ADD tensorflow-1.1.0-cp35-cp35m-linux_armv7l.whl .
+RUN pip3 install ./tensorflow-1.1.0-cp35-cp35m-linux_armv7l.whl
+
+# Build OpenCV 3.3.0 (minimal configuration for ARM)
+WORKDIR /
+RUN wget https://github.com/opencv/opencv/archive/3.3.0.zip \
+&& unzip 3.3.0.zip \
+&& mkdir /opencv-3.3.0/cmake_binary \
+&& cd /opencv-3.3.0/cmake_binary \
+&& cmake -DBUILD_TIFF=ON \
+  -DBUILD_opencv_java=OFF \
+  -DWITH_CUDA=OFF \
+  -DBUILD_TESTS=OFF \
+  -DBUILD_PERF_TESTS=OFF \
+  -DCMAKE_BUILD_TYPE=RELEASE \
+  -DCMAKE_INSTALL_PREFIX=$(python3 -c "import sys; print(sys.prefix)") \
+  -DPYTHON_EXECUTABLE=$(which python3) \
+  -DPYTHON_INCLUDE_DIR=$(python3 -c "from distutils.sysconfig import get_python_inc; print(get_python_inc())") \
+  -DPYTHON_PACKAGES_PATH=$(python3 -c "from distutils.sysconfig import get_python_lib; print(get_python_lib())") .. \
+&& make install \
+&& rm /3.3.0.zip \
+&& rm -r /opencv-3.3.0
+
+ADD src/ /app
+WORKDIR /app
+CMD ["python3", "yolo-pi.py"]
+```
+
+</CodeGroup>
+
+## Environment Variables
+
+The YOLO-Pi script requires the `MQTT` environment variable to connect to your MQTT broker.
+
+### Setting MQTT Server
+
+```bash
+# Run with environment variable
+docker run -it --rm \
+  --device=/dev/video0:/dev/video0 \
+  -e MQTT=192.168.1.100 \
+  ashya/yolopi
+```
+
+Or use a `.env` file:
+
+```bash .env
+MQTT=192.168.1.100
+```
+
+```bash
+docker run -it --rm \
+  --device=/dev/video0:/dev/video0 \
+  --env-file .env \
+  ashya/yolopi
+```
+
+## Volume Mounts
+
+Mount local directories to customize model files or access output:
+
+### Mount Model Data
+
+```bash
+docker run -it --rm \
+  --device=/dev/video0:/dev/video0 \
+  -v $(pwd)/model_data:/app/model_data \
+  -e MQTT=192.168.1.100 \
+  ashya/yolopi
+```
+
+### Mount Source Code for Development
+
+```bash
+docker run -it --rm \
+  --device=/dev/video0:/dev/video0 \
+  -v $(pwd)/src:/app \
+  -e MQTT=192.168.1.100 \
+  ashya/yolopi /bin/bash
+```
+
+This allows you to edit `yolo-pi.py` locally and test changes in the container.
+
+## Docker Compose
+
+For easier management, create a `docker-compose.yml`:
+
+```yaml docker-compose.yml
+version: '3.8'
+
+services:
+  yolopi:
+    image: ashya/yolopi
+    container_name: yolo-pi
+    privileged: true
+    devices:
+      - /dev/video0:/dev/video0
+    environment:
+      - MQTT=192.168.1.100
+    volumes:
+      - ./model_data:/app/model_data
+    restart: unless-stopped
+```
+
+Run with:
+
+```bash
+docker-compose up -d
+```
+
+## Troubleshooting
+
+<Accordion title="Permission denied: /dev/video0">
+  Add your user to the `video` group:
+  
+  ```bash
+  sudo usermod -aG video $USER
+  ```
+  
+  Or run with `--privileged` flag (already included in examples).
+</Accordion>
+
+<Accordion title="Build fails on Raspberry Pi">
+  Check swap space:
+  
+  ```bash
+  free -h
+  ```
+  
+  Ensure at least 2GB swap is active. See [Raspberry Pi setup](/setup/raspberry-pi#usb-swap-setup).
+</Accordion>
+
+<Accordion title="MQTT connection error">
+  Verify the MQTT environment variable is set:
+  
+  ```bash
+  docker run -it --rm \
+    --device=/dev/video0:/dev/video0 \
+    -e MQTT=your-mqtt-server \
+    ashya/yolopi /bin/bash
+  ```
+  
+  Test MQTT connection from within container:
+  
+  ```bash
+  echo $MQTT
+  ping $MQTT
+  ```
+</Accordion>
+
+<Accordion title="Out of disk space during build">
+  Docker builds require significant disk space. Clean up unused images:
+  
+  ```bash
+  docker system prune -a
+  ```
+</Accordion>
+
+## Performance Optimization
+
+<Card title="Use Pre-built Images" icon="download">
+  Instead of building locally, pull pre-built images if available:
+  
+  ```bash
+  docker pull ashya/yolopi
+  ```
+</Card>
+
+<Card title="Multi-stage Builds" icon="layer-group">
+  For production, consider creating a multi-stage Dockerfile to reduce final image size by separating build and runtime dependencies.
+</Card>
+
+<Card title="Cache Build Layers" icon="database">
+  When rebuilding, Docker caches intermediate layers. To rebuild from scratch:
+  
+  ```bash
+  docker build --no-cache -t ashya/yolo-pi -f Dockerfile.x86 .
+  ```
+</Card>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Raspberry Pi Setup" icon="raspberry-pi" href="/setup/raspberry-pi">
+    Optimize YOLO-Pi for Raspberry Pi hardware
+  </Card>
+  <Card title="Model Conversion" icon="gear" href="/guides/model-conversion">
+    Convert YOLO models to Keras format
+  </Card>
+</CardGroup>
