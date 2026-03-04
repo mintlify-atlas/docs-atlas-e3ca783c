@@ -1,0 +1,91 @@
+{
+  "projectType": "ai-ml",
+  "projectName": "YOLO-Pi",
+  "projectDescription": "Real-time object detection on Raspberry Pi using YOLO and Keras",
+  "theme": "aspen",
+  "primaryColor": "#04fcfc",
+  "lightColor": "#0f2a25",
+  "darkColor": null,
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Getting Started",
+            "pages": [
+              "introduction",
+              "quickstart"
+            ]
+          },
+          {
+            "group": "Setup",
+            "pages": [
+              "setup/installation",
+              "setup/raspberry-pi",
+              "setup/docker"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/model-conversion",
+              "guides/running-inference",
+              "guides/mqtt-integration"
+            ]
+          },
+          {
+            "group": "Deployment",
+            "pages": [
+              "deployment/docker-x86",
+              "deployment/docker-rpi",
+              "deployment/production"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Core",
+            "pages": [
+              "api/yolo-pi",
+              "api/keras-yolo",
+              "api/keras-darknet19"
+            ]
+          },
+          {
+            "group": "Utilities",
+            "pages": [
+              "api/draw-boxes",
+              "api/utils"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Real-time object detection on Raspberry Pi",
+    "YOLO model conversion to Keras",
+    "OpenCV3 camera integration",
+    "Docker support for x86 and ARM",
+    "MQTT messaging for detected objects",
+    "Pre-trained model support (COCO, Pascal VOC)"
+  ],
+  "publicApiSurface": [
+    "recognize_image()",
+    "yolo_body()",
+    "yolo_head()",
+    "yolo_eval()",
+    "yolo_filter_boxes()",
+    "yolo_loss()",
+    "yolo_boxes_to_corners()",
+    "preprocess_true_boxes()",
+    "darknet_body()",
+    "DarknetConv2D",
+    "DarknetConv2D_BN_Leaky",
+    "draw_boxes()"
+  ]
+}
