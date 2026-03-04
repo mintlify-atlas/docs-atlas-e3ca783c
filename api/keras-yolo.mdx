@@ -7,6 +7,76 @@ description: 'YOLO v2 model implementation in Keras with training and evaluation
 
 The `keras_yolo.py` module implements the YOLO v2 (You Only Look Once version 2) object detection architecture in Keras. It provides functions for building the model, processing outputs, computing loss, and evaluating predictions.
 
+## Helper Functions
+
+### space_to_depth_x2()
+
+TensorFlow space-to-depth transformation with block size 2.
+
+```python
+space_to_depth_x2(x)
+```
+
+#### Parameters
+
+<ParamField path="x" type="tensor" required>
+  Input tensor to be transformed.
+</ParamField>
+
+#### Returns
+
+<ResponseField name="output" type="tensor">
+  Transformed tensor with spatial dimensions reduced by 2x and channels increased by 4x.
+</ResponseField>
+
+#### Description
+
+This is a thin wrapper for TensorFlow's `space_to_depth` operation with a fixed block size of 2. It reorganizes spatial data into the depth (channel) dimension, which is used in YOLO v2 to concatenate features from different scales.
+
+**Transformation:**
+- Input shape: `(batch, height, width, channels)`
+- Output shape: `(batch, height/2, width/2, channels*4)`
+
+This function is used internally by `yolo_body()` to create the passthrough layer that combines high-resolution features with low-resolution features.
+
+```python
+# Used in a Keras Lambda layer
+from keras.layers import Lambda
+
+conv21_reshaped = Lambda(
+    space_to_depth_x2,
+    output_shape=space_to_depth_x2_output_shape,
+    name='space_to_depth')(conv21)
+```
+
+### space_to_depth_x2_output_shape()
+
+Calculate output shape for space_to_depth operation with block size 2.
+
+```python
+space_to_depth_x2_output_shape(input_shape)
+```
+
+#### Parameters
+
+<ParamField path="input_shape" type="tuple" required>
+  Input shape as `(batch, height, width, channels)`.
+</ParamField>
+
+#### Returns
+
+<ResponseField name="output_shape" type="tuple">
+  Output shape as `(batch, height//2, width//2, channels*4)`. If height is `None`, returns `(batch, None, None, channels*4)` for dynamic shapes.
+</ResponseField>
+
+#### Description
+
+This helper function computes the output shape after applying `space_to_depth_x2()`. It's used by Keras Lambda layers to determine the output shape at graph construction time.
+
+<Note>
+For TensorFlow backend, this function may not be strictly required as shape inference can be automatic. However, it's provided for compatibility and explicit shape specification.
+</Note>
+
 ## Model Architecture Functions
 
 ### yolo_body()
@@ -61,6 +131,66 @@ conv21_reshaped = Lambda(
 x = concatenate([conv21_reshaped, conv20])
 x = DarknetConv2D_BN_Leaky(1024, (3, 3))(x)
 x = DarknetConv2D(num_anchors * (num_classes + 5), (1, 1))(x)
+```
+
+### yolo()
+
+Generates a complete YOLO v2 localization model by combining the model body and head.
+
+```python
+yolo(inputs, anchors, num_classes)
+```
+
+#### Parameters
+
+<ParamField path="inputs" type="keras.Input" required>
+  Input tensor for the model.
+</ParamField>
+
+<ParamField path="anchors" type="array-like" required>
+  Anchor box definitions. Shape: `(num_anchors, 2)` with width/height pairs.
+</ParamField>
+
+<ParamField path="num_classes" type="int" required>
+  Number of object classes to detect.
+</ParamField>
+
+#### Returns
+
+<ResponseField name="outputs" type="tuple">
+  Tuple of tensors `(box_xy, box_wh, box_confidence, box_class_probs)` representing processed predictions ready for evaluation.
+</ResponseField>
+
+#### Description
+
+This is a convenience function that combines `yolo_body()` and `yolo_head()` to create a complete YOLO model in one step. It internally:
+
+1. Calls `yolo_body()` to create the CNN architecture
+2. Passes the model output through `yolo_head()` to get prediction tensors
+3. Returns the processed outputs
+
+```python
+# Equivalent to:
+num_anchors = len(anchors)
+body = yolo_body(inputs, num_anchors, num_classes)
+outputs = yolo_head(body.output, anchors, num_classes)
+return outputs
+```
+
+#### Usage Example
+
+```python
+from keras.layers import Input
+from yad2k.models.keras_yolo import yolo
+import numpy as np
+
+# Define inputs and anchors
+inputs = Input(shape=(416, 416, 3))
+anchors = np.array([[1.08, 1.19], [3.42, 4.41], [6.63, 11.38], 
+                    [9.42, 5.11], [16.62, 10.52]])
+
+# Create complete YOLO model
+box_xy, box_wh, box_confidence, box_class_probs = yolo(inputs, anchors, num_classes=20)
 ```
 
 ## Output Processing Functions
